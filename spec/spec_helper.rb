@@ -1,0 +1,11 @@
+# frozen_string_literal: true
+
+require "rspec"
+
+RSpec.configure do |config|
+  config.expect_with :rspec do |c|
+    c.syntax = :expect
+  end
+end
+
+require_relative "../lib/ds_proxy"

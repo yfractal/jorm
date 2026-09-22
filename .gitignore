@@ -1,0 +1,10 @@
+/.bundle/
+/vendor/bundle/
+/dumps/
+*.gem
+.ruby-version
+.env
+.DS_Store
+/coverage/
+/tmp/
+/log/
