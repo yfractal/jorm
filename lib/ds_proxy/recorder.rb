@@ -6,19 +6,23 @@ require "time"
 require "pathname"
 
 module DsProxy
-  class DumpStore
-    DUMP_FILE_PATTERN = /^(req|res)-.+\.json$/
+  # Persists request/response traffic to disk for debugging, and redacts
+  # sensitive data before writing. TeeBody hands it the collected response
+  # chunks once a streamed body has finished; Recorder turns those chunks
+  # into the on-disk record.
+  class Recorder
+    RECORD_FILE_PATTERN = /^(req|res)-.+\.json$/
 
     def initialize(
-      enabled: Config.dump_enabled?,
-      dir: Config.dump_dir,
-      dump_response: Config.dump_response?,
-      max_files: Config.dump_max_files,
-      max_age_hours: Config.dump_max_age_hours
+      enabled: Config.record_enabled?,
+      dir: Config.record_dir,
+      record_response: Config.record_response?,
+      max_files: Config.record_max_files,
+      max_age_hours: Config.record_max_age_hours
     )
       @enabled = enabled
       @dir = Pathname(dir)
-      @dump_response = dump_response
+      @record_response = record_response
       @max_files = max_files
       @max_age_hours = max_age_hours
 
@@ -29,8 +33,8 @@ module DsProxy
       @enabled
     end
 
-    def dump_response?
-      @dump_response
+    def record_response?
+      @record_response
     end
 
     def redact_headers(headers)
@@ -52,15 +56,29 @@ module DsProxy
       text.gsub(/sk-[A-Za-z0-9_-]{6,}/, "sk-***redacted***")
     end
 
-    def write(prefix, meta)
+    # Called by TeeBody's on_complete function once a streamed response
+    # body has been fully read. Fills in the response body on +record+
+    # from the collected +chunks+, then writes it out.
+    def record_response(record, chunks, content_type)
+      resp_buf = chunks.join
+      unless resp_buf.empty?
+        record["response"]["body"] = parse_body(resp_buf, content_type)
+      end
+    rescue StandardError
+      # still write what we have
+    ensure
+      write("res", record)
+    end
+
+    def write(prefix, record)
       return unless @enabled
 
       ts = Time.now.utc.iso8601(3).tr(":", "-")
       filename = "#{prefix}-#{ts}.json"
       filepath = @dir.join(filename)
 
-      File.write(filepath, JSON.pretty_generate(meta))
-      puts "  \u{1F4C4} dumped \u2192 #{filepath}"
+      File.write(filepath, JSON.pretty_generate(record))
+      puts "  \u{1F4C4} recorded \u2192 #{filepath}"
       cleanup!
     end
 
@@ -68,7 +86,7 @@ module DsProxy
       return unless @enabled
 
       files = Dir.children(@dir).filter_map do |name|
-        next unless DUMP_FILE_PATTERN.match?(name)
+        next unless RECORD_FILE_PATTERN.match?(name)
 
         full = @dir.join(name)
         next unless full.file?
@@ -97,13 +115,13 @@ module DsProxy
       end
 
       if removed > 0
-        puts "  \u{1F9F9} dump cleanup: removed #{removed} old file(s)"
+        puts "  \u{1F9F9} record cleanup: removed #{removed} old file(s)"
       end
     rescue StandardError
       # Cleanup failure must not affect request forwarding.
     end
 
-    def parse_body_for_dump(raw_bytes, content_type)
+    def parse_body(raw_bytes, content_type)
       return nil if raw_bytes.nil? || raw_bytes.empty?
 
       raw = redact_body_text(raw_bytes.dup.force_encoding("UTF-8"))

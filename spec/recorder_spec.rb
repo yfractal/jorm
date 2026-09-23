@@ -4,16 +4,16 @@ require "tmpdir"
 require "fileutils"
 require_relative "spec_helper"
 
-RSpec.describe DsProxy::DumpStore do
+RSpec.describe DsProxy::Recorder do
   let(:dir) { Dir.mktmpdir }
 
   after { FileUtils.remove_entry(dir) }
 
-  subject(:store) do
+  subject(:recorder) do
     described_class.new(
       enabled: true,
       dir: dir,
-      dump_response: false,
+      record_response: false,
       max_files: 2,
       max_age_hours: 0
     )
@@ -21,7 +21,7 @@ RSpec.describe DsProxy::DumpStore do
 
   describe "#redact_headers" do
     it "redacts authorization and x-api-key" do
-      result = store.redact_headers(
+      result = recorder.redact_headers(
         "authorization" => "Bearer sk-secret",
         "x-api-key" => "sk-abc",
         "content-type" => "application/json"
@@ -36,17 +36,17 @@ RSpec.describe DsProxy::DumpStore do
   describe "#redact_body_text" do
     it "redacts sk- tokens" do
       text = '{"key":"sk-abcdefghijk"}'
-      expect(store.redact_body_text(text)).to eq('{"key":"sk-***redacted***"}')
+      expect(recorder.redact_body_text(text)).to eq('{"key":"sk-***redacted***"}')
     end
   end
 
   describe "#write and #cleanup!" do
-    it "writes a dump file and prunes oldest when over max_files" do
-      store.write("req", { "n" => 1 })
+    it "writes a record file and prunes oldest when over max_files" do
+      recorder.write("req", { "n" => 1 })
       sleep 0.05
-      store.write("req", { "n" => 2 })
+      recorder.write("req", { "n" => 2 })
       sleep 0.05
-      store.write("req", { "n" => 3 })
+      recorder.write("req", { "n" => 3 })
 
       files = Dir.children(dir).grep(/^(req|res)-.+\.json$/).sort
       expect(files.length).to eq(2)
@@ -56,7 +56,7 @@ RSpec.describe DsProxy::DumpStore do
       aged = described_class.new(
         enabled: true,
         dir: dir,
-        dump_response: false,
+        record_response: false,
         max_files: 0,
         max_age_hours: 1
       )
@@ -73,16 +73,27 @@ RSpec.describe DsProxy::DumpStore do
     end
   end
 
-  describe "#parse_body_for_dump" do
+  describe "#record_response" do
+    it "fills in the response body from chunks and writes the record" do
+      record = { "response" => { "body" => nil } }
+
+      recorder.record_response(record, ['{"token":"sk-abcdefghijk"}'], "application/json")
+
+      expect(record["response"]["body"]).to eq({ "token" => "sk-***redacted***" })
+      expect(Dir.children(dir).any? { |n| n.start_with?("res-") }).to eq(true)
+    end
+  end
+
+  describe "#parse_body" do
     it "parses JSON and redacts secrets" do
       raw = '{"token":"sk-abcdefghijk"}'
-      result = store.parse_body_for_dump(raw, "application/json")
+      result = recorder.parse_body(raw, "application/json")
       expect(result).to eq({ "token" => "sk-***redacted***" })
     end
 
     it "returns redacted text for non-JSON" do
       raw = "token=sk-abcdefghijk"
-      expect(store.parse_body_for_dump(raw, "text/plain")).to eq(
+      expect(recorder.parse_body(raw, "text/plain")).to eq(
         "token=sk-***redacted***"
       )
     end

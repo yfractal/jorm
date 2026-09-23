@@ -6,10 +6,10 @@ require "time"
 module DsProxy
   class App
     def initialize(
-      dump_store: DumpStore.new,
+      recorder: Recorder.new,
       upstream: UpstreamClient.new
     )
-      @dump_store = dump_store
+      @recorder = recorder
       @upstream = upstream
     end
 
@@ -20,8 +20,8 @@ module DsProxy
       body_buffer, patched = patch_json_body(req.body, req.content_type)
       upstream_path = "#{Config::UPSTREAM_PREFIX}#{req.url.empty? ? "/" : req.url}"
 
-      dump_meta = build_dump_meta(req, upstream_path, patched)
-      record_request_dump(dump_meta, req.body, body_buffer, req.content_type, patched)
+      record = build_record(req, upstream_path, patched)
+      record_request(record, req.body, body_buffer, req.content_type, patched)
 
       upstream_headers = HeaderFilter.copy_request_headers(
         req.headers,
@@ -35,7 +35,7 @@ module DsProxy
       log_request(req, patched, status)
 
       response_headers = HeaderFilter.copy_response_headers(result.headers)
-      body = attach_response_dump(dump_meta, result, status, response_headers)
+      body = attach_response_record(record, result, status, response_headers)
 
       [status, response_headers, body]
     end
@@ -64,7 +64,7 @@ module DsProxy
       [body_buffer, patched]
     end
 
-    def build_dump_meta(req, upstream_path, patched)
+    def build_record(req, upstream_path, patched)
       {
         "timestamp" => Time.now.utc.iso8601(3),
         "method" => req.method,
@@ -72,30 +72,30 @@ module DsProxy
         "upstreamPath" => upstream_path,
         "patched" => patched,
         "request" => {
-          "headers" => @dump_store.redact_headers(req.headers),
+          "headers" => @recorder.redact_headers(req.headers),
           "body" => nil
         },
         "response" => nil
       }
     end
 
-    # Fills in the request portion of dump_meta (body / patchedBody) when
-    # dumping is enabled.
-    def record_request_dump(dump_meta, original_body, body_buffer, content_type, patched)
-      return unless @dump_store.enabled?
+    # Fills in the request portion of +record+ (body / patchedBody) when
+    # recording is enabled.
+    def record_request(record, original_body, body_buffer, content_type, patched)
+      return unless @recorder.enabled?
 
       begin
         if !original_body.empty?
-          dump_meta["request"]["body"] =
-            @dump_store.parse_body_for_dump(original_body, content_type)
+          record["request"]["body"] =
+            @recorder.parse_body(original_body, content_type)
         end
 
         if patched
-          dump_meta["request"]["patchedBody"] =
-            @dump_store.parse_body_for_dump(body_buffer, content_type)
+          record["request"]["patchedBody"] =
+            @recorder.parse_body(body_buffer, content_type)
         end
       rescue StandardError
-        # ignore parse failures in dump
+        # ignore parse failures when recording
       end
     end
 
@@ -124,21 +124,21 @@ module DsProxy
       puts "#{Time.now.utc.iso8601} #{req.method} #{req.url} #{tag} -> #{status}"
     end
 
-    # Attaches response dumping to the response body when dumping is
-    # enabled, writing the dump record either immediately (request-only
-    # dumps) or once the response body has been fully streamed.
-    def attach_response_dump(dump_meta, result, status, response_headers)
+    # Attaches response recording to the response body when recording is
+    # enabled, writing the record either immediately (request-only
+    # records) or once the response body has been fully streamed.
+    def attach_response_record(record, result, status, response_headers)
       body = result.body
-      return body unless @dump_store.enabled?
+      return body unless @recorder.enabled?
 
-      unless @dump_store.dump_response?
-        @dump_store.write("req", dump_meta)
+      unless @recorder.record_response?
+        @recorder.write("req", record)
         return body
       end
 
-      dump_meta["response"] = {
+      record["response"] = {
         "status" => status,
-        "headers" => @dump_store.redact_headers(
+        "headers" => @recorder.redact_headers(
           result.headers.transform_keys(&:to_s).transform_values do |v|
             v.is_a?(Array) ? v.join(", ") : v.to_s
           end
@@ -147,19 +147,7 @@ module DsProxy
       }
 
       resp_ct = response_headers["content-type"].to_s
-      TeeBody.new(body) do |chunks|
-        begin
-          resp_buf = chunks.join
-          if !resp_buf.empty?
-            dump_meta["response"]["body"] =
-              @dump_store.parse_body_for_dump(resp_buf, resp_ct)
-          end
-        rescue StandardError
-          # still dump what we have
-        ensure
-          @dump_store.write("res", dump_meta)
-        end
-      end
+      TeeBody.new(body) { |chunks| @recorder.record_response(record, chunks, resp_ct) }
     end
 
     def health_response
