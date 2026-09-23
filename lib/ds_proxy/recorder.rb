@@ -57,13 +57,20 @@ module DsProxy
     end
 
     # Called by TeeBody's on_complete function once a streamed response
-    # body has been fully read. Fills in the response body on +record+
-    # from the collected +chunks+, then writes it out.
-    def record_response(record, chunks, content_type)
-      resp_buf = chunks.join
-      unless resp_buf.empty?
-        record["response"]["body"] = parse_body(resp_buf, content_type)
+    # body has been fully read. Builds the "response" portion of +record+
+    # from +upstream_result+ (status/headers) and the collected +chunks+
+    # (body), then writes it out.
+    def record_response(record, chunks, upstream_result)
+      headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
+        v.is_a?(Array) ? v.join(", ") : v.to_s
       end
+      resp_buf = chunks.join
+
+      record["response"] = {
+        "status" => upstream_result.status,
+        "headers" => redact_headers(headers),
+        "body" => resp_buf.empty? ? nil : parse_body(resp_buf, headers["content-type"])
+      }
     rescue StandardError
       # still write what we have
     ensure

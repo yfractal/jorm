@@ -23,19 +23,14 @@ module DsProxy
       record = build_record(req, upstream_path, patched)
       record_request(record, req.body, body_buffer, req.content_type, patched)
 
-      upstream_headers = HeaderFilter.copy_request_headers(
-        req.headers,
-        body_buffer.bytesize
-      )
-
-      result, error_response = call_upstream(req, upstream_path, upstream_headers, body_buffer)
+      result, error_response = call_upstream(req, upstream_path, body_buffer)
       return error_response if error_response
 
       status = result.status || 502
       log_request(req, patched, status)
 
       response_headers = HeaderFilter.copy_response_headers(result.headers)
-      body = attach_response_record(record, result, status, response_headers)
+      body = TeeBody.new(result.body) { |chunks| @recorder.record_response(record, chunks, result) if @recorder.enabled?}
 
       [status, response_headers, body]
     end
@@ -102,6 +97,11 @@ module DsProxy
     # Proxies the request to upstream. Returns [result, nil] on success or
     # [nil, rack_error_response] if the upstream call raised.
     def call_upstream(req, upstream_path, upstream_headers, body_buffer)
+      upstream_headers = HeaderFilter.copy_request_headers(
+        req.headers,
+        body_buffer.bytesize
+      )
+
       result = @upstream.call(
         method: req.method,
         path: upstream_path,
@@ -122,32 +122,6 @@ module DsProxy
     def log_request(req, patched, status)
       tag = patched ? "[classifier patched]" : "[pass]"
       puts "#{Time.now.utc.iso8601} #{req.method} #{req.url} #{tag} -> #{status}"
-    end
-
-    # Attaches response recording to the response body when recording is
-    # enabled, writing the record either immediately (request-only
-    # records) or once the response body has been fully streamed.
-    def attach_response_record(record, result, status, response_headers)
-      body = result.body
-      return body unless @recorder.enabled?
-
-      unless @recorder.record_response?
-        @recorder.write("req", record)
-        return body
-      end
-
-      record["response"] = {
-        "status" => status,
-        "headers" => @recorder.redact_headers(
-          result.headers.transform_keys(&:to_s).transform_values do |v|
-            v.is_a?(Array) ? v.join(", ") : v.to_s
-          end
-        ),
-        "body" => nil
-      }
-
-      resp_ct = response_headers["content-type"].to_s
-      TeeBody.new(body) { |chunks| @recorder.record_response(record, chunks, resp_ct) }
     end
 
     def health_response

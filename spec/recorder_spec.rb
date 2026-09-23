@@ -74,11 +74,20 @@ RSpec.describe DsProxy::Recorder do
   end
 
   describe "#record_response" do
-    it "fills in the response body from chunks and writes the record" do
-      record = { "response" => { "body" => nil } }
+    it "fills in status, headers, and body from the upstream result and chunks, then writes the record" do
+      record = {}
+      upstream_result = DsProxy::UpstreamClient::Result.new(
+        status: 200,
+        headers: {
+          "content-type" => "application/json",
+          "authorization" => "Bearer sk-secret"
+        }
+      )
 
-      recorder.record_response(record, ['{"token":"sk-abcdefghijk"}'], "application/json")
+      recorder.record_response(record, ['{"token":"sk-abcdefghijk"}'], upstream_result)
 
+      expect(record["response"]["status"]).to eq(200)
+      expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")
       expect(record["response"]["body"]).to eq({ "token" => "sk-***redacted***" })
       expect(Dir.children(dir).any? { |n| n.start_with?("res-") }).to eq(true)
     end
