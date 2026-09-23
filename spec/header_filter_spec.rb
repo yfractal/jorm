@@ -2,7 +2,7 @@
 
 require_relative "spec_helper"
 
-RSpec.describe DsProxy::HeaderFilter do
+RSpec.describe Jorm::HeaderFilter do
   describe ".from_rack_env" do
     it "extracts HTTP_* headers and content-type/length" do
       env = {

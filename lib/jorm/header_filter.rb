@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DsProxy
+module Jorm
   module HeaderFilter
     module_function
 

@@ -26,7 +26,7 @@ module Rack
     end
 
     def headers
-      @headers ||= DsProxy::HeaderFilter.from_rack_env(@env)
+      @headers ||= Jorm::HeaderFilter.from_rack_env(@env)
     end
 
     def content_type

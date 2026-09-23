@@ -2,7 +2,7 @@
 
 require "pathname"
 
-module DsProxy
+module Jorm
   module Config
     module_function
 

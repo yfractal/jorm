@@ -1,5 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "lib/ds_proxy"
+require_relative "lib/jorm"
 
-run DsProxy::App.new
+run Jorm::App.new

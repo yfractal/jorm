@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DsProxy
+module Jorm
   # Rack body wrapper that streams chunks to the client while also
   # collecting them for dump capture, then fires +on_complete+.
   class TeeBody

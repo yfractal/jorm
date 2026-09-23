@@ -8,4 +8,4 @@ RSpec.configure do |config|
   end
 end
 
-require_relative "../lib/ds_proxy"
+require_relative "../lib/jorm"

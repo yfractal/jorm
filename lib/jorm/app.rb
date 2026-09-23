@@ -3,10 +3,10 @@
 require "json"
 require "time"
 
-module DsProxy
+module Jorm
   class App
     def initialize(
-      recorder: Recorder.new,
+      recorder: Rack::Recorder.new,
       upstream: UpstreamClient.new
     )
       @recorder = recorder

@@ -2,7 +2,7 @@
 
 require "json"
 
-module DsProxy
+module Jorm
   # Owns patching of an incoming request body before it's forwarded
   # upstream: rewrites the body in place when it matches the security
   # classifier.
@@ -21,8 +21,8 @@ module DsProxy
       if !body.empty? && content_type.include?("application/json")
         begin
           parsed = JSON.parse(body)
-          if SecurityClassifier.match?(parsed)
-            SecurityClassifier.patch!(parsed)
+          if DsProxy::SecurityClassifier.match?(parsed)
+            DsProxy::SecurityClassifier.patch!(parsed)
             body = JSON.generate(parsed)
             patched = true
           end

@@ -5,7 +5,7 @@ require "fileutils"
 require "time"
 require "pathname"
 
-module DsProxy
+module Rack
   # Persists request/response traffic to disk for debugging, and redacts
   # sensitive data before writing. TeeBody hands it the collected response
   # chunks once a streamed body has finished; Recorder turns those chunks
@@ -14,11 +14,11 @@ module DsProxy
     RECORD_FILE_PATTERN = /^(req|res)-.+\.json$/
 
     def initialize(
-      enabled: Config.record_enabled?,
-      dir: Config.record_dir,
-      record_response: Config.record_response?,
-      max_files: Config.record_max_files,
-      max_age_hours: Config.record_max_age_hours
+      enabled: Jorm::Config.record_enabled?,
+      dir: Jorm::Config.record_dir,
+      record_response: Jorm::Config.record_response?,
+      max_files: Jorm::Config.record_max_files,
+      max_age_hours: Jorm::Config.record_max_age_hours
     )
       @enabled = enabled
       @dir = Pathname(dir)
@@ -61,7 +61,7 @@ module DsProxy
         "timestamp" => Time.now.utc.iso8601(3),
         "method" => req.method,
         "url" => req.url,
-        "upstreamPath" => UpstreamClient.upstream_path(req),
+        "upstreamPath" => Jorm::UpstreamClient.upstream_path(req),
         "patched" => patched,
         "request" => {
           "headers" => redact_headers(req.headers),

@@ -6,7 +6,7 @@ require "protocol/http/request"
 require "protocol/http/headers"
 require "openssl"
 
-module DsProxy
+module Jorm
   class UpstreamClient
     RETRYABLE = [
       Errno::ECONNRESET,

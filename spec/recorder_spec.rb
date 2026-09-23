@@ -4,7 +4,7 @@ require "tmpdir"
 require "fileutils"
 require_relative "spec_helper"
 
-RSpec.describe DsProxy::Recorder do
+RSpec.describe Rack::Recorder do
   let(:dir) { Dir.mktmpdir }
 
   after { FileUtils.remove_entry(dir) }
@@ -76,7 +76,7 @@ RSpec.describe DsProxy::Recorder do
   describe "#record_response" do
     it "fills in status, headers, and body from the upstream result and chunks, then writes the record" do
       record = {}
-      upstream_result = DsProxy::UpstreamClient::Result.new(
+      upstream_result = Jorm::UpstreamClient::Result.new(
         status: 200,
         headers: {
           "content-type" => "application/json",
