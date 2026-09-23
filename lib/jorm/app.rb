@@ -6,7 +6,7 @@ require "time"
 module Jorm
   class App
     def initialize(
-      recorder: Rack::Recorder.new,
+      recorder: Recorder.new,
       upstream: UpstreamClient.new
     )
       @recorder = recorder

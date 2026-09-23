@@ -5,7 +5,7 @@ require "fileutils"
 require "time"
 require "pathname"
 
-module Rack
+module Jorm
   # Persists request/response traffic to disk for debugging, and redacts
   # sensitive data before writing. TeeBody hands it the collected response
   # chunks once a streamed body has finished; Recorder turns those chunks

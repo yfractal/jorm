@@ -4,7 +4,7 @@ require "tmpdir"
 require "fileutils"
 require_relative "spec_helper"
 
-RSpec.describe Rack::Recorder do
+RSpec.describe Jorm::Recorder do
   let(:dir) { Dir.mktmpdir }
 
   after { FileUtils.remove_entry(dir) }
