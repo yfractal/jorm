@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
-require_relative "ds_proxy/config"
 require_relative "ds_proxy/security_classifier"
-require_relative "ds_proxy/header_filter"
-require_relative "ds_proxy/request"
-require_relative "ds_proxy/downstream"
-require_relative "ds_proxy/recorder"
-require_relative "ds_proxy/tee_body"
-require_relative "ds_proxy/upstream_client"
-require_relative "ds_proxy/app"
+require_relative "jorm/config"
+require_relative "jorm/header_filter"
+require_relative "rack/request"
+require_relative "jorm/downstream"
+require_relative "jorm/recorder"
+require_relative "jorm/tee_body"
+require_relative "jorm/upstream_client"
+require_relative "jorm/app"
 
 module DsProxy
 end
