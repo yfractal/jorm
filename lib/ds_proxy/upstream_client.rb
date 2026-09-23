@@ -56,12 +56,13 @@ module DsProxy
       @endpoint = Async::HTTP::Endpoint.parse(upstream_url)
     end
 
-    def call(method:, path:, headers:, body:)
+    def call(req:, path:, body:)
       retried = false
+      headers = HeaderFilter.copy_request_headers(req.headers, body.to_s.bytesize)
 
       begin
         client = Async::HTTP::Client.new(@endpoint)
-        request = build_request(method, path, headers, body)
+        request = build_request(req.method, path, headers, body)
         response = client.call(request)
 
         Result.new(

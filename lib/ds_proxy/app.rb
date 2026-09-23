@@ -30,7 +30,15 @@ module DsProxy
       log_request(req, patched, status)
 
       response_headers = HeaderFilter.copy_response_headers(result.headers)
-      body = TeeBody.new(result.body) { |chunks| @recorder.record_response(record, chunks, result) if @recorder.enabled?}
+      body = result.body
+
+      if @recorder.enabled?
+        if @recorder.record_response?
+          body = TeeBody.new(body) { |chunks| @recorder.record_response(record, chunks, result) }
+        else
+          @recorder.write("req", record)
+        end
+      end
 
       [status, response_headers, body]
     end
@@ -96,16 +104,10 @@ module DsProxy
 
     # Proxies the request to upstream. Returns [result, nil] on success or
     # [nil, rack_error_response] if the upstream call raised.
-    def call_upstream(req, upstream_path, upstream_headers, body_buffer)
-      upstream_headers = HeaderFilter.copy_request_headers(
-        req.headers,
-        body_buffer.bytesize
-      )
-
+    def call_upstream(req, upstream_path, body_buffer)
       result = @upstream.call(
-        method: req.method,
+        req: req,
         path: upstream_path,
-        headers: upstream_headers,
         body: body_buffer.empty? ? nil : body_buffer
       )
       [result, nil]
