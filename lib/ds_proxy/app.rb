@@ -14,30 +14,25 @@ module DsProxy
     end
 
     def call(env)
-      path = env["PATH_INFO"].to_s
-      return health_response if path == "/health"
+      req = Request.new(env)
+      return health_response if req.health_check?
 
-      request_headers = HeaderFilter.from_rack_env(env)
-      original_body = read_body(env)
-      content_type = request_headers["content-type"].to_s
-      body_buffer, patched = patch_json_body(original_body, content_type)
+      body_buffer, patched = patch_json_body(req.body, req.content_type)
+      upstream_path = "#{Config::UPSTREAM_PREFIX}#{req.url.empty? ? "/" : req.url}"
 
-      request_url = build_request_url(path, env["QUERY_STRING"])
-      upstream_path = "#{Config::UPSTREAM_PREFIX}#{request_url.empty? ? "/" : request_url}"
-
-      dump_meta = build_dump_meta(env, request_url, upstream_path, patched, request_headers)
-      record_request_dump(dump_meta, original_body, body_buffer, content_type, patched)
+      dump_meta = build_dump_meta(req, upstream_path, patched)
+      record_request_dump(dump_meta, req.body, body_buffer, req.content_type, patched)
 
       upstream_headers = HeaderFilter.copy_request_headers(
-        request_headers,
+        req.headers,
         body_buffer.bytesize
       )
 
-      result, error_response = call_upstream(env, upstream_path, upstream_headers, body_buffer)
+      result, error_response = call_upstream(req, upstream_path, upstream_headers, body_buffer)
       return error_response if error_response
 
       status = result.status || 502
-      log_request(env, request_url, patched, status)
+      log_request(req, patched, status)
 
       response_headers = HeaderFilter.copy_response_headers(result.headers)
       body = attach_response_dump(dump_meta, result, status, response_headers)
@@ -69,19 +64,15 @@ module DsProxy
       [body_buffer, patched]
     end
 
-    def build_request_url(path, query)
-      query.to_s.empty? ? path : "#{path}?#{query}"
-    end
-
-    def build_dump_meta(env, request_url, upstream_path, patched, request_headers)
+    def build_dump_meta(req, upstream_path, patched)
       {
         "timestamp" => Time.now.utc.iso8601(3),
-        "method" => env["REQUEST_METHOD"],
-        "url" => request_url,
+        "method" => req.method,
+        "url" => req.url,
         "upstreamPath" => upstream_path,
         "patched" => patched,
         "request" => {
-          "headers" => @dump_store.redact_headers(request_headers),
+          "headers" => @dump_store.redact_headers(req.headers),
           "body" => nil
         },
         "response" => nil
@@ -110,9 +101,9 @@ module DsProxy
 
     # Proxies the request to upstream. Returns [result, nil] on success or
     # [nil, rack_error_response] if the upstream call raised.
-    def call_upstream(env, upstream_path, upstream_headers, body_buffer)
+    def call_upstream(req, upstream_path, upstream_headers, body_buffer)
       result = @upstream.call(
-        method: env["REQUEST_METHOD"],
+        method: req.method,
         path: upstream_path,
         headers: upstream_headers,
         body: body_buffer.empty? ? nil : body_buffer
@@ -128,9 +119,9 @@ module DsProxy
       [nil, error_response]
     end
 
-    def log_request(env, request_url, patched, status)
+    def log_request(req, patched, status)
       tag = patched ? "[classifier patched]" : "[pass]"
-      puts "#{Time.now.utc.iso8601} #{env["REQUEST_METHOD"]} #{request_url} #{tag} -> #{status}"
+      puts "#{Time.now.utc.iso8601} #{req.method} #{req.url} #{tag} -> #{status}"
     end
 
     # Attaches response dumping to the response body when dumping is
@@ -177,15 +168,6 @@ module DsProxy
         { "content-type" => "application/json; charset=utf-8" },
         [JSON.generate({ "ok" => true })]
       ]
-    end
-
-    def read_body(env)
-      input = env["rack.input"]
-      return "" unless input
-
-      input.read.to_s
-    ensure
-      input.rewind if input.respond_to?(:rewind)
     end
   end
 end
