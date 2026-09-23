@@ -17,22 +17,22 @@ module DsProxy
       req = Request.new(env)
       return health_response if req.health_check?
 
-      body_buffer, patched = patch_json_body(req.body, req.content_type)
+      body, patched = patch_request(req)
       upstream_path = "#{Config::UPSTREAM_PREFIX}#{req.url.empty? ? "/" : req.url}"
 
       record = build_record(req, upstream_path, patched)
-      record_request(record, req.body, body_buffer, req.content_type, patched)
+      record_request(record, req.body, body, req.content_type, patched)
 
-      result, error_response = call_upstream(req, upstream_path, body_buffer)
-      return error_response if error_response
+      result = @upstream.call(
+        req: req,
+        path: upstream_path,
+        body: body
+      )
 
-      status = result.status || 502
-      log_request(req, patched, status)
+      # record response from the upstream
+      body = TeeBody.new(result.body) { |chunks| @recorder.maybe_record_response(record, chunks, result) }
 
-      response_headers = HeaderFilter.copy_response_headers(result.headers)
-      body = TeeBody.new(result.body) { |chunks| @recorder.record_response(record, chunks, result) if @recorder.enabled?}
-
-      [status, response_headers, body]
+      [result.status, HeaderFilter.copy_response_headers(result.headers), body]
     end
 
     private
@@ -40,7 +40,10 @@ module DsProxy
     # Patches the request body in-place when it matches the security
     # classifier, returning the (possibly rewritten) body and whether it
     # was patched.
-    def patch_json_body(body_buffer, content_type)
+    def patch_request(req)
+      body_buffer = req.body
+      content_type = req.content_type
+
       patched = false
 
       if !body_buffer.empty? && content_type.include?("application/json")
@@ -111,11 +114,6 @@ module DsProxy
         [JSON.generate({ "error" => "upstream_error", "message" => e.message })]
       ]
       [nil, error_response]
-    end
-
-    def log_request(req, patched, status)
-      tag = patched ? "[classifier patched]" : "[pass]"
-      puts "#{Time.now.utc.iso8601} #{req.method} #{req.url} #{tag} -> #{status}"
     end
 
     def health_response

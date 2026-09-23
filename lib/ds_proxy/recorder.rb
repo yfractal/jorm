@@ -60,7 +60,9 @@ module DsProxy
     # body has been fully read. Builds the "response" portion of +record+
     # from +upstream_result+ (status/headers) and the collected +chunks+
     # (body), then writes it out.
-    def record_response(record, chunks, upstream_result)
+    def maybe_record_response(record, chunks, upstream_result)
+      return unless enabled?
+
       headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
         v.is_a?(Array) ? v.join(", ") : v.to_s
       end

@@ -84,7 +84,7 @@ RSpec.describe DsProxy::Recorder do
         }
       )
 
-      recorder.record_response(record, ['{"token":"sk-abcdefghijk"}'], upstream_result)
+      recorder.maybe_record_response(record, ['{"token":"sk-abcdefghijk"}'], upstream_result)
 
       expect(record["response"]["status"]).to eq(200)
       expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")

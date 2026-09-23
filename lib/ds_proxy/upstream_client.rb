@@ -81,7 +81,12 @@ module DsProxy
         raise
       rescue StandardError => e
         client&.close
-        raise
+
+        Result.new(
+          status: 502,
+          headers: { "content-type" => "application/json; charset=utf-8" },
+          body: [JSON.generate({ "error" => "upstream_error", "message" => e.message })]
+        )
       end
     end
 
