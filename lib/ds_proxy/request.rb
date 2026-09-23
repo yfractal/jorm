@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DsProxy
+module Rack
   # Thin wrapper around a Rack env hash exposing the bits of the
   # incoming request the proxy cares about, with memoized access.
   class Request
@@ -26,7 +26,7 @@ module DsProxy
     end
 
     def headers
-      @headers ||= HeaderFilter.from_rack_env(@env)
+      @headers ||= DsProxy::HeaderFilter.from_rack_env(@env)
     end
 
     def content_type

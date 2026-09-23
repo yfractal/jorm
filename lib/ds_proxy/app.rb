@@ -14,7 +14,7 @@ module DsProxy
     end
 
     def call(env)
-      req = Request.new(env)
+      req = Rack::Request.new(env)
       return health_response if req.health_check?
 
       body, patched = Downstream.new(req).patch

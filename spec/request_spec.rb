@@ -2,7 +2,7 @@
 
 require "stringio"
 
-RSpec.describe DsProxy::Request do
+RSpec.describe Rack::Request do
   def build_env(overrides = {})
     {
       "REQUEST_METHOD" => "POST",
