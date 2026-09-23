@@ -14,13 +14,12 @@ module Jorm
     end
 
     def call(env)
-      req = Rack::Request.new(env)
+      req = Jorm::Request.new(env)
       return health_response if req.health_check?
 
       body, patched = Downstream.new(req).patch
 
-      record = @recorder.build_record(req, patched)
-      @recorder.record_request(record, req.body, body, req.content_type, patched)
+      @recorder.record_request(req, body, patched)
 
       result = @upstream.call(
         req: req,
@@ -29,7 +28,7 @@ module Jorm
       )
 
       # record response from the upstream
-      body = TeeBody.new(result.body) { |chunks| @recorder.maybe_record_response(record, chunks, result) }
+      body = TeeBody.new(result.body) { |chunks| @recorder.maybe_record_response(req, chunks, result) }
 
       [result.status, HeaderFilter.copy_response_headers(result.headers), body]
     end

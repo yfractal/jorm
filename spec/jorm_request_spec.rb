@@ -2,7 +2,7 @@
 
 require "stringio"
 
-RSpec.describe Rack::Request do
+RSpec.describe Jorm::Request do
   def build_env(overrides = {})
     {
       "REQUEST_METHOD" => "POST",
@@ -85,6 +85,24 @@ RSpec.describe Rack::Request do
       req = described_class.new(build_env("rack.input" => input))
       req.body
       expect(input.pos).to eq(0)
+    end
+  end
+
+  describe "#jorm_request_id" do
+    it "generates a UUID" do
+      req = described_class.new(build_env)
+      expect(req.jorm_request_id).to match(/\A[0-9a-f-]{36}\z/)
+    end
+
+    it "memoizes the generated UUID" do
+      req = described_class.new(build_env)
+      expect(req.jorm_request_id).to eq(req.jorm_request_id)
+    end
+
+    it "generates a different UUID per request instance" do
+      req1 = described_class.new(build_env)
+      req2 = described_class.new(build_env)
+      expect(req1.jorm_request_id).not_to eq(req2.jorm_request_id)
     end
   end
 end

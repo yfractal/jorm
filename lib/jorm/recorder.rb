@@ -56,9 +56,15 @@ module Jorm
       text.gsub(/sk-[A-Za-z0-9_-]{6,}/, "sk-***redacted***")
     end
 
-    def build_record(req, patched)
-      {
+    # Builds and writes the request portion of a record (headers / body /
+    # patchedBody) when recording is enabled. +req+'s jorm_request_id ties
+    # this record to the response record written later.
+    def record_request(req, body_buffer, patched)
+      return unless @enabled
+
+      record = {
         "timestamp" => Time.now.utc.iso8601(3),
+        "jormRequestId" => req.jorm_request_id,
         "method" => req.method,
         "url" => req.url,
         "upstreamPath" => Jorm::UpstreamClient.upstream_path(req),
@@ -66,17 +72,13 @@ module Jorm
         "request" => {
           "headers" => redact_headers(req.headers),
           "body" => nil
-        },
-        "response" => nil
+        }
       }
-    end
-
-    # Fills in the request portion of +record+ (body / patchedBody) when
-    # recording is enabled.
-    def record_request(record, original_body, body_buffer, content_type, patched)
-      return unless @enabled
 
       begin
+        original_body = req.body
+        content_type = req.content_type
+
         if !original_body.empty?
           record["request"]["body"] = parse_body(original_body, content_type)
         end
@@ -87,28 +89,38 @@ module Jorm
       rescue StandardError
         # ignore parse failures when recording
       end
+
+      write("req", record)
     end
 
     # Called by TeeBody's on_complete function once a streamed response
-    # body has been fully read. Builds the "response" portion of +record+
-    # from +upstream_result+ (status/headers) and the collected +chunks+
-    # (body), then writes it out.
-    def maybe_record_response(record, chunks, upstream_result)
+    # body has been fully read. Builds a new record for the "response"
+    # side from +upstream_result+ (status/headers) and the collected
+    # +chunks+ (body), tagged with +req+'s jorm_request_id, then writes
+    # it out.
+    def maybe_record_response(req, chunks, upstream_result)
       return unless enabled?
 
-      headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
-        v.is_a?(Array) ? v.join(", ") : v.to_s
-      end
-      resp_buf = chunks.join
-
-      record["response"] = {
-        "status" => upstream_result.status,
-        "headers" => redact_headers(headers),
-        "body" => resp_buf.empty? ? nil : parse_body(resp_buf, headers["content-type"])
+      record = {
+        "timestamp" => Time.now.utc.iso8601(3),
+        "jormRequestId" => req.jorm_request_id
       }
-    rescue StandardError
-      # still write what we have
-    ensure
+
+      begin
+        headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
+          v.is_a?(Array) ? v.join(", ") : v.to_s
+        end
+        resp_buf = chunks.join
+
+        record["response"] = {
+          "status" => upstream_result.status,
+          "headers" => redact_headers(headers),
+          "body" => resp_buf.empty? ? nil : parse_body(resp_buf, headers["content-type"])
+        }
+      rescue StandardError
+        # still write what we have
+      end
+
       write("res", record)
     end
 

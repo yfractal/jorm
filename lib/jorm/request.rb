@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
-module Rack
+require "securerandom"
+
+module Jorm
   # Thin wrapper around a Rack env hash exposing the bits of the
   # incoming request the proxy cares about, with memoized access.
   class Request
@@ -39,6 +41,13 @@ module Rack
 
     def body
       @body ||= read_body
+    end
+
+    # A UUID identifying this request, generated once and cached for the
+    # lifetime of the request so request/response records can be tied
+    # together.
+    def jorm_request_id
+      @jorm_request_id ||= SecureRandom.uuid
     end
 
     private

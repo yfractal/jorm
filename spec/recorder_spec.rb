@@ -2,6 +2,7 @@
 
 require "tmpdir"
 require "fileutils"
+require "stringio"
 require_relative "spec_helper"
 
 RSpec.describe Jorm::Recorder do
@@ -17,6 +18,22 @@ RSpec.describe Jorm::Recorder do
       max_files: 2,
       max_age_hours: 0
     )
+  end
+
+  def build_req(overrides = {})
+    env = {
+      "REQUEST_METHOD" => "POST",
+      "PATH_INFO" => "/v1/messages",
+      "QUERY_STRING" => "",
+      "rack.input" => StringIO.new(""),
+      "CONTENT_TYPE" => "application/json"
+    }.merge(overrides)
+    Jorm::Request.new(env)
+  end
+
+  def written_record(prefix)
+    files = Dir.children(dir).select { |n| n.start_with?("#{prefix}-") }
+    JSON.parse(File.read(File.join(dir, files.first)))
   end
 
   describe "#redact_headers" do
@@ -73,9 +90,24 @@ RSpec.describe Jorm::Recorder do
     end
   end
 
-  describe "#record_response" do
-    it "fills in status, headers, and body from the upstream result and chunks, then writes the record" do
-      record = {}
+  describe "#record_request" do
+    it "builds and writes a request record tagged with the request's jorm_request_id" do
+      req = build_req("rack.input" => StringIO.new('{"key":"sk-abcdefghijk"}'))
+
+      recorder.record_request(req, '{"patched":true}', true)
+
+      record = written_record("req")
+      expect(record["jormRequestId"]).to eq(req.jorm_request_id)
+      expect(record["method"]).to eq("POST")
+      expect(record["patched"]).to eq(true)
+      expect(record["request"]["body"]).to eq({ "key" => "sk-***redacted***" })
+      expect(record["request"]["patchedBody"]).to eq({ "patched" => true })
+    end
+  end
+
+  describe "#maybe_record_response" do
+    it "builds and writes a response record tagged with the request's jorm_request_id" do
+      req = build_req
       upstream_result = Jorm::UpstreamClient::Result.new(
         status: 200,
         headers: {
@@ -84,12 +116,13 @@ RSpec.describe Jorm::Recorder do
         }
       )
 
-      recorder.maybe_record_response(record, ['{"token":"sk-abcdefghijk"}'], upstream_result)
+      recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result)
 
+      record = written_record("res")
+      expect(record["jormRequestId"]).to eq(req.jorm_request_id)
       expect(record["response"]["status"]).to eq(200)
       expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")
       expect(record["response"]["body"]).to eq({ "token" => "sk-***redacted***" })
-      expect(Dir.children(dir).any? { |n| n.start_with?("res-") }).to eq(true)
     end
   end
 
