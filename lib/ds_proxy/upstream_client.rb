@@ -52,6 +52,10 @@ module DsProxy
 
     Result = Struct.new(:status, :headers, :body, keyword_init: true)
 
+    def self.upstream_path(req)
+      "#{Config::UPSTREAM_PREFIX}#{req.url.empty? ? "/" : req.url}"
+    end
+
     def initialize(upstream_url: Config::UPSTREAM_URL)
       @endpoint = Async::HTTP::Endpoint.parse(upstream_url)
     end

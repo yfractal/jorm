@@ -56,6 +56,39 @@ module DsProxy
       text.gsub(/sk-[A-Za-z0-9_-]{6,}/, "sk-***redacted***")
     end
 
+    def build_record(req, patched)
+      {
+        "timestamp" => Time.now.utc.iso8601(3),
+        "method" => req.method,
+        "url" => req.url,
+        "upstreamPath" => UpstreamClient.upstream_path(req),
+        "patched" => patched,
+        "request" => {
+          "headers" => redact_headers(req.headers),
+          "body" => nil
+        },
+        "response" => nil
+      }
+    end
+
+    # Fills in the request portion of +record+ (body / patchedBody) when
+    # recording is enabled.
+    def record_request(record, original_body, body_buffer, content_type, patched)
+      return unless @enabled
+
+      begin
+        if !original_body.empty?
+          record["request"]["body"] = parse_body(original_body, content_type)
+        end
+
+        if patched
+          record["request"]["patchedBody"] = parse_body(body_buffer, content_type)
+        end
+      rescue StandardError
+        # ignore parse failures when recording
+      end
+    end
+
     # Called by TeeBody's on_complete function once a streamed response
     # body has been fully read. Builds the "response" portion of +record+
     # from +upstream_result+ (status/headers) and the collected +chunks+
