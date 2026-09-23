@@ -30,15 +30,7 @@ module DsProxy
       log_request(req, patched, status)
 
       response_headers = HeaderFilter.copy_response_headers(result.headers)
-      body = result.body
-
-      if @recorder.enabled?
-        if @recorder.record_response?
-          body = TeeBody.new(body) { |chunks| @recorder.record_response(record, chunks, result) }
-        else
-          @recorder.write("req", record)
-        end
-      end
+      body = TeeBody.new(result.body) { |chunks| @recorder.record_response(record, chunks, result) if @recorder.enabled?}
 
       [status, response_headers, body]
     end
