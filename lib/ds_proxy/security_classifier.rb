@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 module DsProxy
+  # inspired by https://github.com/dashxio/deepseek-claude-proxy
   module SecurityClassifier
     module_function
 
