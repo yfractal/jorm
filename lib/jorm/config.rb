@@ -22,13 +22,5 @@ module Jorm
     def record_response?
       %w[true 1].include?(ENV["DS_DUMP_RESPONSE"].to_s)
     end
-
-    def record_max_files
-      Integer(ENV.fetch("DS_DUMP_MAX_FILES", "9"))
-    end
-
-    def record_max_age_hours
-      Integer(ENV.fetch("DS_DUMP_MAX_AGE_HOURS", "0"))
-    end
   end
 end

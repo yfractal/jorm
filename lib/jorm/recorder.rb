@@ -10,23 +10,28 @@ module Jorm
   # sensitive data before writing. TeeBody hands it the collected response
   # chunks once a streamed body has finished; Recorder turns those chunks
   # into the on-disk record.
+  #
+  # Each Recorder instance owns a single dump file (created on
+  # initialization) that every request/response record is appended to as
+  # a line of JSON (JSONL).
   class Recorder
-    RECORD_FILE_PATTERN = /^(req|res)-.+\.json$/
+    attr_reader :file_path
 
     def initialize(
       enabled: Jorm::Config.record_enabled?,
       dir: Jorm::Config.record_dir,
-      record_response: Jorm::Config.record_response?,
-      max_files: Jorm::Config.record_max_files,
-      max_age_hours: Jorm::Config.record_max_age_hours
+      record_response: Jorm::Config.record_response?
     )
       @enabled = enabled
       @dir = Pathname(dir)
       @record_response = record_response
-      @max_files = max_files
-      @max_age_hours = max_age_hours
 
-      ensure_dir! if @enabled
+      if @enabled
+        ensure_dir!
+        ts = Time.now.utc.iso8601(3).tr(":", "-")
+        @file_path = @dir.join("dump-#{ts}.jsonl")
+        FileUtils.touch(@file_path)
+      end
     end
 
     def enabled?
@@ -110,55 +115,12 @@ module Jorm
       write("res", record)
     end
 
-    def write(prefix, record)
+    def write(type, record)
       return unless @enabled
 
-      ts = Time.now.utc.iso8601(3).tr(":", "-")
-      filename = "#{prefix}-#{ts}.json"
-      filepath = @dir.join(filename)
-
-      File.write(filepath, JSON.pretty_generate(record))
-      puts "  \u{1F4C4} recorded \u2192 #{filepath}"
-      cleanup!
-    end
-
-    def cleanup!
-      return unless @enabled
-
-      files = Dir.children(@dir).filter_map do |name|
-        next unless RECORD_FILE_PATTERN.match?(name)
-
-        full = @dir.join(name)
-        next unless full.file?
-
-        { full: full, mtime: full.mtime.to_f }
-      rescue Errno::ENOENT, Errno::EACCES
-        nil
-      end
-
-      files.sort_by! { |e| e[:mtime] }
-      removed = 0
-
-      if @max_age_hours > 0
-        cutoff = Time.now.to_f - (@max_age_hours * 3600)
-        while files.any? && files.first[:mtime] < cutoff
-          files.shift[:full].unlink
-          removed += 1
-        end
-      end
-
-      if @max_files > 0
-        while files.length > @max_files
-          files.shift[:full].unlink
-          removed += 1
-        end
-      end
-
-      if removed > 0
-        puts "  \u{1F9F9} record cleanup: removed #{removed} old file(s)"
-      end
-    rescue StandardError
-      # Cleanup failure must not affect request forwarding.
+      line = JSON.generate(record.merge("type" => type))
+      File.open(@file_path, "a") { |f| f.puts(line) }
+      puts "  \u{1F4C4} recorded #{type} \u2192 #{@file_path}"
     end
 
     def parse_body(raw_bytes, content_type)

@@ -14,9 +14,7 @@ RSpec.describe Jorm::Recorder do
     described_class.new(
       enabled: true,
       dir: dir,
-      record_response: false,
-      max_files: 2,
-      max_age_hours: 0
+      record_response: false
     )
   end
 
@@ -31,9 +29,15 @@ RSpec.describe Jorm::Recorder do
     Jorm::Request.new(env)
   end
 
-  def written_record(prefix)
-    files = Dir.children(dir).select { |n| n.start_with?("#{prefix}-") }
-    JSON.parse(File.read(File.join(dir, files.first)))
+  def written_records(type)
+    File.readlines(recorder.file_path).map { |line| JSON.parse(line) }.select { |r| r["type"] == type }
+  end
+
+  describe "#initialize" do
+    it "creates a single dump file eagerly" do
+      expect(File).to exist(recorder.file_path)
+      expect(recorder.file_path.to_s).to end_with(".jsonl")
+    end
   end
 
   describe "#redact_headers" do
@@ -57,36 +61,14 @@ RSpec.describe Jorm::Recorder do
     end
   end
 
-  describe "#write and #cleanup!" do
-    it "writes a record file and prunes oldest when over max_files" do
+  describe "#write" do
+    it "appends every record to the single dump file" do
       recorder.write("req", { "n" => 1 })
-      sleep 0.05
       recorder.write("req", { "n" => 2 })
-      sleep 0.05
       recorder.write("req", { "n" => 3 })
 
-      files = Dir.children(dir).grep(/^(req|res)-.+\.json$/).sort
-      expect(files.length).to eq(2)
-    end
-
-    it "removes files older than max_age_hours" do
-      aged = described_class.new(
-        enabled: true,
-        dir: dir,
-        record_response: false,
-        max_files: 0,
-        max_age_hours: 1
-      )
-
-      path = File.join(dir, "req-old.json")
-      File.write(path, "{}")
-      File.utime(Time.now - 7200, Time.now - 7200, path)
-
-      aged.write("req", { "n" => 1 })
-
-      names = Dir.children(dir)
-      expect(names).not_to include("req-old.json")
-      expect(names.any? { |n| n.start_with?("req-") }).to eq(true)
+      records = written_records("req")
+      expect(records.map { |r| r["n"] }).to eq([1, 2, 3])
     end
   end
 
@@ -96,7 +78,7 @@ RSpec.describe Jorm::Recorder do
 
       recorder.record_request(req, '{"patched":true}', true)
 
-      record = written_record("req")
+      record = written_records("req").first
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
       expect(record["method"]).to eq("POST")
       expect(record["path_with_query_string"]).to eq("/v1/messages")
@@ -120,7 +102,7 @@ RSpec.describe Jorm::Recorder do
 
       recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result)
 
-      record = written_record("res")
+      record = written_records("res").first
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
       expect(record["response"]["status"]).to eq(200)
       expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")

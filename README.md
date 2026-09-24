@@ -29,17 +29,19 @@ curl http://127.0.0.1:8787/health
 |---|---|---|
 | `DS_PROXY_HOST` | `127.0.0.1` | Bind host |
 | `DS_PROXY_PORT` | `8787` | Bind port |
-| `DS_DUMP` | off | Set to `1`/`true` to write dump JSON files |
+| `DS_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |
 | `DS_DUMP_DIR` | `./dumps` | Dump output directory |
 | `DS_DUMP_RESPONSE` | off | Also capture upstream response bodies |
-| `DS_DUMP_MAX_FILES` | `9` | Max dump files retained (`0` = unlimited) |
-| `DS_DUMP_MAX_AGE_HOURS` | `0` | Max dump age in hours (`0` = unlimited) |
 
 Example with dumps enabled:
 
 ```bash
 DS_DUMP=1 DS_DUMP_RESPONSE=1 bin/server
 ```
+
+Each server run creates a single `dump-<timestamp>.jsonl` file (one JSON
+record per line) in `DS_DUMP_DIR`, and every request/response record for
+that run is appended to it.
 
 Sensitive headers (`authorization`, `x-api-key`) and `sk-...` tokens in
 bodies are redacted in dump files only; forwarded traffic is unchanged.
