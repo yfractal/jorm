@@ -9,9 +9,7 @@ module Jorm
     LISTEN_HOST = ENV.fetch("DS_PROXY_HOST", "127.0.0.1")
     LISTEN_PORT = Integer(ENV.fetch("DS_PROXY_PORT", "8787"))
 
-    UPSTREAM_HOST = "api.deepseek.com"
-    UPSTREAM_PREFIX = "/anthropic"
-    UPSTREAM_URL = "https://#{UPSTREAM_HOST}"
+    UPSTREAM_URL = "https://#{UPSTREAM_URL}"
 
     def record_enabled?
       %w[true 1].include?(ENV["DS_DUMP"].to_s)

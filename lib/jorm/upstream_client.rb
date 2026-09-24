@@ -53,11 +53,11 @@ module Jorm
     Result = Struct.new(:status, :headers, :body, keyword_init: true)
 
     def self.upstream_path(req)
-      "#{Config::UPSTREAM_PREFIX}#{req.url.empty? ? "/" : req.url}"
+      req.path_with_query_string || '/'
     end
 
     def initialize(upstream_url: Config::UPSTREAM_URL)
-      @endpoint = Async::HTTP::Endpoint.parse(upstream_url)
+      @url = Async::HTTP::Endpoint.parse(upstream_url)
     end
 
     def call(req:, path:, body:)
@@ -65,7 +65,7 @@ module Jorm
       headers = HeaderFilter.copy_request_headers(req.headers, body.to_s.bytesize)
 
       begin
-        client = Async::HTTP::Client.new(@endpoint)
+        client = Async::HTTP::Client.new(@url)
         request = build_request(req.method, path, headers, body)
         response = client.call(request)
 

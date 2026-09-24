@@ -23,8 +23,8 @@ module Jorm
     end
 
     # Path plus query string, e.g. "/v1/messages?foo=bar".
-    def url
-      @url ||= query_string.to_s.empty? ? path : "#{path}?#{query_string}"
+    def path_with_query_string
+      @path_with_query_string ||= query_string.to_s.empty? ? path : "#{path}?#{query_string}"
     end
 
     def headers

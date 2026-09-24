@@ -66,29 +66,15 @@ module Jorm
         "timestamp" => Time.now.utc.iso8601(3),
         "jormRequestId" => req.jorm_request_id,
         "method" => req.method,
-        "url" => req.url,
+        "path_with_query_string" => req.path_with_query_string,
         "upstreamPath" => Jorm::UpstreamClient.upstream_path(req),
         "patched" => patched,
         "request" => {
-          "headers" => redact_headers(req.headers),
-          "body" => nil
+          "headers" => req.headers,
+          "body" => body_buffer,
+          "patchedBody" => patched
         }
       }
-
-      begin
-        original_body = req.body
-        content_type = req.content_type
-
-        if !original_body.empty?
-          record["request"]["body"] = parse_body(original_body, content_type)
-        end
-
-        if patched
-          record["request"]["patchedBody"] = parse_body(body_buffer, content_type)
-        end
-      rescue StandardError
-        # ignore parse failures when recording
-      end
 
       write("req", record)
     end
