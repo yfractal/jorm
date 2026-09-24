@@ -27,8 +27,8 @@ curl http://127.0.0.1:8787/health
 
 | Variable | Default | Description |
 |---|---|---|
-| `DS_PROXY_HOST` | `127.0.0.1` | Bind host |
-| `DS_PROXY_PORT` | `8787` | Bind port |
+| `PROXY_HOST` | `127.0.0.1` | Bind host |
+| `PROXY_PORT` | `8787` | Bind port |
 | `DS_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |
 | `DS_DUMP_DIR` | `./dumps` | Dump output directory |
 | `DS_DUMP_RESPONSE` | off | Also capture upstream response bodies |
