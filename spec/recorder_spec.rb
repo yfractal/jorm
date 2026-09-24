@@ -92,16 +92,18 @@ RSpec.describe Jorm::Recorder do
 
   describe "#record_request" do
     it "builds and writes a request record tagged with the request's jorm_request_id" do
-      req = build_req("rack.input" => StringIO.new('{"key":"sk-abcdefghijk"}'))
+      req = build_req
 
       recorder.record_request(req, '{"patched":true}', true)
 
       record = written_record("req")
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
       expect(record["method"]).to eq("POST")
+      expect(record["path_with_query_string"]).to eq("/v1/messages")
       expect(record["patched"]).to eq(true)
-      expect(record["request"]["body"]).to eq({ "key" => "sk-***redacted***" })
-      expect(record["request"]["patchedBody"]).to eq({ "patched" => true })
+      expect(record["request"]["headers"]).to eq(req.headers)
+      expect(record["request"]["body"]).to eq('{"patched":true}')
+      expect(record["request"]["patchedBody"]).to eq(true)
     end
   end
 

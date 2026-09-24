@@ -28,15 +28,15 @@ RSpec.describe Jorm::Request do
     end
   end
 
-  describe "#url" do
+  describe "#path_with_query_string" do
     it "returns just the path when there is no query string" do
       req = described_class.new(build_env("QUERY_STRING" => ""))
-      expect(req.url).to eq("/v1/messages")
+      expect(req.path_with_query_string).to eq("/v1/messages")
     end
 
     it "appends the query string when present" do
       req = described_class.new(build_env("QUERY_STRING" => "foo=bar"))
-      expect(req.url).to eq("/v1/messages?foo=bar")
+      expect(req.path_with_query_string).to eq("/v1/messages?foo=bar")
     end
   end
 
