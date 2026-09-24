@@ -19,6 +19,15 @@ module Jorm
       Pathname(ENV.fetch("DS_DUMP_DIR", "./dumps")).expand_path
     end
 
+    # Shared dump filename set once by bin/server (before it execs the
+    # server) so that every worker process/fork spawned for this run
+    # appends to the same file instead of each creating its own. Falls
+    # back to nil, in which case Recorder generates its own filename
+    # (e.g. in tests, or when running config.ru directly).
+    def record_file
+      ENV["DS_DUMP_FILE"]
+    end
+
     def record_response?
       %w[true 1].include?(ENV["DS_DUMP_RESPONSE"].to_s)
     end

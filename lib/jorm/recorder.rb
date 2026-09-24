@@ -11,16 +11,21 @@ module Jorm
   # chunks once a streamed body has finished; Recorder turns those chunks
   # into the on-disk record.
   #
-  # Each Recorder instance owns a single dump file (created on
-  # initialization) that every request/response record is appended to as
-  # a line of JSON (JSONL).
+  # Every request/response record is appended to a single dump file as a
+  # line of JSON (JSONL). The filename is normally supplied by bin/server
+  # (via DS_DUMP_FILE / +file_name+) so that all worker processes for a
+  # given server run -- e.g. Falcon's forked workers, which each load
+  # config.ru and build their own Recorder -- share one file instead of
+  # each creating its own. Writes are flock-protected so concurrent
+  # processes/fibers appending at the same time don't interleave lines.
   class Recorder
     attr_reader :file_path
 
     def initialize(
       enabled: Jorm::Config.record_enabled?,
       dir: Jorm::Config.record_dir,
-      record_response: Jorm::Config.record_response?
+      record_response: Jorm::Config.record_response?,
+      file_name: Jorm::Config.record_file
     )
       @enabled = enabled
       @dir = Pathname(dir)
@@ -28,8 +33,8 @@ module Jorm
 
       if @enabled
         ensure_dir!
-        ts = Time.now.utc.iso8601(3).tr(":", "-")
-        @file_path = @dir.join("dump-#{ts}.jsonl")
+        file_name ||= "dump-#{Time.now.utc.iso8601(3).tr(":", "-")}.jsonl"
+        @file_path = @dir.join(file_name)
         FileUtils.touch(@file_path)
       end
     end
@@ -118,8 +123,15 @@ module Jorm
     def write(type, record)
       return unless @enabled
 
-      line = JSON.generate(record.merge("type" => type))
-      File.open(@file_path, "a") { |f| f.puts(line) }
+      line = "#{JSON.generate(record.merge("type" => type))}\n"
+
+      File.open(@file_path, File::WRONLY | File::APPEND | File::CREAT) do |f|
+        f.flock(File::LOCK_EX)
+        f.write(line)
+      ensure
+        f.flock(File::LOCK_UN)
+      end
+
       puts "  \u{1F4C4} recorded #{type} \u2192 #{@file_path}"
     end
 

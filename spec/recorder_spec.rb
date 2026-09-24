@@ -38,6 +38,36 @@ RSpec.describe Jorm::Recorder do
       expect(File).to exist(recorder.file_path)
       expect(recorder.file_path.to_s).to end_with(".jsonl")
     end
+
+    it "reuses an explicit file_name so multiple instances share one file" do
+      shared_name = "dump-shared.jsonl"
+      first = described_class.new(enabled: true, dir: dir, record_response: false, file_name: shared_name)
+      second = described_class.new(enabled: true, dir: dir, record_response: false, file_name: shared_name)
+
+      expect(first.file_path).to eq(second.file_path)
+      expect(Dir.children(dir)).to eq([shared_name])
+    end
+
+    it "defaults file_name from Jorm::Config.record_file (DS_DUMP_FILE)" do
+      allow(Jorm::Config).to receive(:record_file).and_return("dump-from-env.jsonl")
+
+      recorder = described_class.new(enabled: true, dir: dir, record_response: false)
+
+      expect(recorder.file_path.to_s).to end_with("dump-from-env.jsonl")
+    end
+  end
+
+  describe "concurrent writes" do
+    it "does not interleave lines written from multiple threads/processes" do
+      threads = Array.new(8) do |i|
+        Thread.new { recorder.write("req", { "n" => i }) }
+      end
+      threads.each(&:join)
+
+      lines = File.readlines(recorder.file_path)
+      expect(lines.length).to eq(8)
+      expect(lines.map { |l| JSON.parse(l)["n"] }.sort).to eq((0..7).to_a)
+    end
   end
 
   describe "#redact_headers" do

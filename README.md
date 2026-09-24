@@ -41,7 +41,10 @@ DS_DUMP=1 DS_DUMP_RESPONSE=1 bin/server
 
 Each server run creates a single `dump-<timestamp>.jsonl` file (one JSON
 record per line) in `DS_DUMP_DIR`, and every request/response record for
-that run is appended to it.
+that run is appended to it. `bin/server` picks the filename once (via
+`DS_DUMP_FILE`) before starting the server, so Falcon's multiple worker
+processes all append to that same file instead of each creating its own;
+writes are file-locked to keep concurrent appends from interleaving.
 
 Sensitive headers (`authorization`, `x-api-key`) and `sk-...` tokens in
 bodies are redacted in dump files only; forwarded traffic is unchanged.
