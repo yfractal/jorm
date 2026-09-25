@@ -2,7 +2,7 @@
 
 require_relative "spec_helper"
 
-RSpec.describe DsProxy::SecurityClassifier do
+RSpec.describe Jorm::SecurityClassifier do
   def classifier_body
     {
       "model" => "claude-sonnet-4-20250514",

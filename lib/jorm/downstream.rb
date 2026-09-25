@@ -21,8 +21,8 @@ module Jorm
       if !body.empty? && content_type.include?("application/json")
         begin
           parsed = JSON.parse(body)
-          if DsProxy::SecurityClassifier.match?(parsed)
-            DsProxy::SecurityClassifier.patch!(parsed)
+          if SecurityClassifier.match?(parsed)
+            SecurityClassifier.patch!(parsed)
             body = JSON.generate(parsed)
             patched = true
           end

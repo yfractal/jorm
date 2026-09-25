@@ -7,8 +7,8 @@ cd "$ROOT"
 HOST="${JO_PROXY_HOST:-127.0.0.1}"
 PORT="${JO_PROXY_PORT:-8787}"
 
-echo "DeepSeek Auto Mode proxy: http://${HOST}:${PORT}"
-echo "Upstream: https://api.deepseek.com/anthropic"
+echo "jorm proxy: http://${HOST}:${PORT}"
+echo "Upstream: ${JO_UPSTREAM_URL:-<unset>}"
 
 if [[ "${JO_DUMP:-}" == "true" || "${JO_DUMP:-}" == "1" ]]; then
   DUMP_DIR="$(cd "${JO_DUMP_DIR:-./dumps}" 2>/dev/null && pwd || echo "${JO_DUMP_DIR:-./dumps}")"

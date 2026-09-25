@@ -1,7 +1,7 @@
-# DeepSeek Anthropic Proxy (Ruby / Falcon / Async)
+# jorm
 
-Reverse proxy that forwards Anthropic-compatible requests to
-`https://api.deepseek.com/anthropic`, with optional patching of Cursor
+Reverse proxy (Ruby / Falcon / Async) that forwards Anthropic-compatible
+requests to any configured upstream, with optional patching of Cursor
 security-classifier payloads and request/response dump capture.
 
 ## Setup
@@ -27,6 +27,7 @@ curl http://127.0.0.1:8787/health
 
 | Variable | Default | Description |
 |---|---|---|
+| `JO_UPSTREAM_URL` | *(required)* | Base URL to proxy requests to, e.g. `https://openrouter.ai/api` |
 | `JO_PROXY_HOST` | `127.0.0.1` | Bind host |
 | `JO_PROXY_PORT` | `8787` | Bind port |
 | `JO_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |

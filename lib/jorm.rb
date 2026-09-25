@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require_relative "ds_proxy/security_classifier"
 require_relative "jorm/config"
+require_relative "jorm/security_classifier"
 require_relative "jorm/header_filter"
 require_relative "jorm/request"
 require_relative "jorm/downstream"
