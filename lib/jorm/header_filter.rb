@@ -39,12 +39,18 @@ module Jorm
       headers
     end
 
-    def copy_request_headers(headers, body_length)
+    def copy_request_headers(headers)
       result = {}
 
       headers.each do |name, value|
         lower = name.downcase
         next if lower == "host"
+        # Async::HTTP derives its own "content-length" from the request
+        # body's #length (for both HTTP/1.1 and HTTP/2) and writes it onto
+        # the wire itself. If we also set an explicit "content-length"
+        # header, it gets sent a second time -- HTTP/2 edges (e.g.
+        # Cloudflare) treat duplicate content-length headers as malformed
+        # per RFC 9113 and reject the request with a 400.
         next if lower == "content-length"
         next if HOP_BY_HOP.include?(lower)
         next if value.nil?
@@ -52,7 +58,6 @@ module Jorm
         result[name] = value
       end
 
-      result["content-length"] = body_length.to_s
       result
     end
 

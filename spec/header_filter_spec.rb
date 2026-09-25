@@ -24,7 +24,7 @@ RSpec.describe Jorm::HeaderFilter do
   end
 
   describe ".copy_request_headers" do
-    it "strips hop-by-hop, host, and recomputes content-length" do
+    it "strips hop-by-hop, host, and content-length headers" do
       headers = {
         "host" => "localhost",
         "content-length" => "999",
@@ -33,11 +33,13 @@ RSpec.describe Jorm::HeaderFilter do
         "content-type" => "application/json"
       }
 
-      result = described_class.copy_request_headers(headers, 42)
+      result = described_class.copy_request_headers(headers)
 
       expect(result).not_to have_key("host")
       expect(result).not_to have_key("connection")
-      expect(result["content-length"]).to eq("42")
+      # Async::HTTP derives content-length itself from the body; an
+      # explicit header here would be sent twice on the wire.
+      expect(result).not_to have_key("content-length")
       expect(result["x-api-key"]).to eq("secret")
       expect(result["content-type"]).to eq("application/json")
     end

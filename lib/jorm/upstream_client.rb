@@ -59,16 +59,23 @@ module Jorm
 
     def initialize(upstream_url: Config::UPSTREAM_URL)
       @url = Async::HTTP::Endpoint.parse(upstream_url)
+      # Async::HTTP::Client only uses @url's host/port/scheme to open the
+      # connection -- unlike Net::HTTP, it does NOT prepend the endpoint's
+      # own path (e.g. the "/api" in "https://openrouter.ai/api") onto
+      # requests built from a plain path like "/v1/messages". We have to
+      # do that ourselves, or requests silently land on the wrong route
+      # upstream (e.g. openrouter.ai's marketing site instead of its API).
+      @base_path = @url.path.to_s.chomp("/")
     end
 
     def call(req:, path:, body:)
       retried = false
-      headers = HeaderFilter.copy_request_headers(req.headers, body.to_s.bytesize)
+      headers = HeaderFilter.copy_request_headers(req.headers)
 
       begin
         client = Async::HTTP::Client.new(@url)
 
-        request = build_request(req.method, path, headers, body)
+        request = build_request(req.method, "#{@base_path}#{path}", headers, body)
         response = client.call(request)
 
         Result.new(
