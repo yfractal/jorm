@@ -4,6 +4,7 @@ require "async/http/client"
 require "async/http/endpoint"
 require "protocol/http/request"
 require "protocol/http/headers"
+require "protocol/http/body/buffered"
 require "openssl"
 
 module Jorm
@@ -66,6 +67,7 @@ module Jorm
 
       begin
         client = Async::HTTP::Client.new(@url)
+
         request = build_request(req.method, path, headers, body)
         response = client.call(request)
 
@@ -85,6 +87,7 @@ module Jorm
         raise
       rescue StandardError => e
         client&.close
+        warn "Upstream error: [#{e.class}] #{e.message}\n#{e.backtrace&.first(10)&.join("\n")}"
 
         Result.new(
           status: 502,
@@ -105,8 +108,20 @@ module Jorm
         path,
         nil,
         protocol_headers,
-        body
+        wrap_body(body)
       )
+    end
+
+    # Async::HTTP (in particular its HTTP/2 implementation) expects the
+    # request body to be a Protocol::HTTP::Body object (responding to
+    # e.g. #stream?), not a raw String. Passing a plain String worked
+    # accidentally under HTTP/1.1 but raises
+    # `NoMethodError: undefined method 'stream?' for an instance of String`
+    # once the connection negotiates HTTP/2 (e.g. against openrouter.ai).
+    def wrap_body(body)
+      return nil if body.nil? || body.empty?
+
+      Protocol::HTTP::Body::Buffered.wrap(body)
     end
 
     def error_code(error)
