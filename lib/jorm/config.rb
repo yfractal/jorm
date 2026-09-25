@@ -27,9 +27,5 @@ module Jorm
     def record_file
       ENV["JO_DUMP_FILE"]
     end
-
-    def record_response?
-      %w[true 1].include?(ENV["JO_DUMP_RESPONSE"].to_s)
-    end
   end
 end

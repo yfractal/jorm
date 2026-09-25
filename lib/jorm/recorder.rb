@@ -24,7 +24,6 @@ module Jorm
     def initialize(
       enabled: Jorm::Config.record_enabled?,
       dir: Jorm::Config.record_dir,
-      record_response: Jorm::Config.record_response?,
       file_name: Jorm::Config.record_file
     )
       @enabled = enabled
@@ -41,10 +40,6 @@ module Jorm
 
     def enabled?
       @enabled
-    end
-
-    def record_response?
-      @record_response
     end
 
     def redact_headers(headers)

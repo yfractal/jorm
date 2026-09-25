@@ -32,12 +32,11 @@ curl http://127.0.0.1:8787/health
 | `JO_PROXY_PORT` | `8787` | Bind port |
 | `JO_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |
 | `JO_DUMP_DIR` | `./dumps` | Dump output directory |
-| `JO_DUMP_RESPONSE` | off | Also capture upstream response bodies |
 
 Example with dumps enabled:
 
 ```bash
-JO_DUMP=1 JO_DUMP_RESPONSE=1 bin/server
+JO_DUMP=1 bin/server
 ```
 
 Each server run creates a single `dump-<timestamp>.jsonl` file (one JSON

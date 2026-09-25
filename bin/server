@@ -20,11 +20,7 @@ if [[ "${JO_DUMP:-}" == "true" || "${JO_DUMP:-}" == "1" ]]; then
   # its own.
   export JO_DUMP_FILE="dump-$(ruby -rtime -e 'print Time.now.utc.iso8601(3).tr(":", "-")').jsonl"
 
-  resp=""
-  if [[ "${JO_DUMP_RESPONSE:-}" == "true" || "${JO_DUMP_RESPONSE:-}" == "1" ]]; then
-    resp=" (incl. response)"
-  fi
-  echo "Dump: enabled → ${DUMP_DIR}/${JO_DUMP_FILE}${resp}"
+  echo "Dump: enabled → ${DUMP_DIR}/${JO_DUMP_FILE}(incl. response)"
 fi
 
 exec bundle exec falcon serve --bind "http://${HOST}:${PORT}" --config config.ru
