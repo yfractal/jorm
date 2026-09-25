@@ -13,8 +13,7 @@ RSpec.describe Jorm::Recorder do
   subject(:recorder) do
     described_class.new(
       enabled: true,
-      dir: dir,
-      record_response: false
+      dir: dir
     )
   end
 
@@ -41,8 +40,8 @@ RSpec.describe Jorm::Recorder do
 
     it "reuses an explicit file_name so multiple instances share one file" do
       shared_name = "dump-shared.jsonl"
-      first = described_class.new(enabled: true, dir: dir, record_response: false, file_name: shared_name)
-      second = described_class.new(enabled: true, dir: dir, record_response: false, file_name: shared_name)
+      first = described_class.new(enabled: true, dir: dir, file_name: shared_name)
+      second = described_class.new(enabled: true, dir: dir, file_name: shared_name)
 
       expect(first.file_path).to eq(second.file_path)
       expect(Dir.children(dir)).to eq([shared_name])
@@ -51,7 +50,7 @@ RSpec.describe Jorm::Recorder do
     it "defaults file_name from Jorm::Config.record_file (JO_DUMP_FILE)" do
       allow(Jorm::Config).to receive(:record_file).and_return("dump-from-env.jsonl")
 
-      recorder = described_class.new(enabled: true, dir: dir, record_response: false)
+      recorder = described_class.new(enabled: true, dir: dir)
 
       expect(recorder.file_path.to_s).to end_with("dump-from-env.jsonl")
     end

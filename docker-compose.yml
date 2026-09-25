@@ -1,0 +1,25 @@
+services:
+  greptimedb:
+    image: greptime/greptimedb:v1.1.4
+    container_name: jorm-greptimedb
+    command: >
+      standalone start
+      --http-addr 0.0.0.0:4000
+      --rpc-bind-addr 0.0.0.0:4001
+      --mysql-addr 0.0.0.0:4002
+      --postgres-addr 0.0.0.0:4003
+    ports:
+      - "4000:4000" # HTTP API + dashboard (http://localhost:4000/dashboard)
+      - "4001:4001" # gRPC
+      - "4002:4002" # MySQL protocol
+      - "4003:4003" # PostgreSQL protocol (used by jorm's DbRecorder)
+    volumes:
+      - greptimedb_data:/greptimedb_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  greptimedb_data:

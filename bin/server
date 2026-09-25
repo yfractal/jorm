@@ -10,6 +10,15 @@ PORT="${JO_PROXY_PORT:-8787}"
 echo "jorm proxy: http://${HOST}:${PORT}"
 echo "Upstream: ${JO_UPSTREAM_URL:-<unset>}"
 
+# Falcon forks multiple worker processes by default. On macOS, having
+# loaded the `pg` gem's libpq (pulled in transitively via GreptimeDB
+# recording) before fork() can trip an Objective-C fork-safety check,
+# crashing workers with "+[__NSCFConstantString initialize] ...". This
+# is the standard workaround; harmless on Linux where it's unset/ignored.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  export OBJC_DISABLE_INITIALIZE_FORK_SAFETY="${OBJC_DISABLE_INITIALIZE_FORK_SAFETY:-YES}"
+fi
+
 if [[ "${JO_DUMP:-}" == "true" || "${JO_DUMP:-}" == "1" ]]; then
   DUMP_DIR="$(cd "${JO_DUMP_DIR:-./dumps}" 2>/dev/null && pwd || echo "${JO_DUMP_DIR:-./dumps}")"
 

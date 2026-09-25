@@ -2,13 +2,32 @@
 
 Reverse proxy (Ruby / Falcon / Async) that forwards Anthropic-compatible
 requests to any configured upstream, with optional patching of Cursor
-security-classifier payloads and request/response dump capture.
+security-classifier payloads and request/response recording to
+GreptimeDB (default) and/or a local dump file.
 
 ## Setup
 
 ```bash
 bundle install
 ```
+
+### Recording database (GreptimeDB)
+
+Request/response recording to [GreptimeDB](https://greptime.com/) is on
+by default. Start it locally with Docker Compose, then apply the schema:
+
+```bash
+docker compose up -d
+bin/migrate
+```
+
+`docker compose up -d` starts a standalone GreptimeDB instance (dashboard
+at `http://localhost:4000/dashboard`). `bin/migrate` applies
+`db/schema.sql` (idempotent -- safe to re-run) via GreptimeDB's
+PostgreSQL wire protocol (port 4003).
+
+If GreptimeDB isn't available, set `JO_DB_RECORD=0` to disable DB
+recording instead.
 
 ## Run
 
@@ -23,6 +42,13 @@ curl http://127.0.0.1:8787/health
 # => {"ok":true}
 ```
 
+> **macOS note:** Falcon runs multiple forked worker processes by
+> default. Loading the `pg` gem's underlying `libpq` library before
+> `fork()` can trip a macOS Objective-C fork-safety check, crashing
+> workers with `+[__NSCFConstantString initialize]`. `bin/server`
+> works around this automatically by setting
+> `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` on Darwin.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -30,10 +56,21 @@ curl http://127.0.0.1:8787/health
 | `JO_UPSTREAM_URL` | *(required)* | Base URL to proxy requests to, e.g. `https://openrouter.ai/api` |
 | `JO_PROXY_HOST` | `127.0.0.1` | Bind host |
 | `JO_PROXY_PORT` | `8787` | Bind port |
-| `JO_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |
+| `JO_DB_RECORD` | on | Set to `0`/`false` to disable recording to GreptimeDB |
+| `GREPTIMEDB_HOST` | `127.0.0.1` | GreptimeDB host |
+| `GREPTIMEDB_PORT` | `4003` | GreptimeDB PostgreSQL wire protocol port |
+| `GREPTIMEDB_DATABASE` | `public` | GreptimeDB database name |
+| `GREPTIMEDB_USER` | *(none)* | GreptimeDB user, if auth is configured |
+| `GREPTIMEDB_PASSWORD` | *(none)* | GreptimeDB password, if auth is configured |
+| `JO_DUMP` | off | Set to `1`/`true` to also record traffic to a local dump file |
 | `JO_DUMP_DIR` | `./dumps` | Dump output directory |
 
-Example with dumps enabled:
+DB recording and file dumping are independent and can both be on at
+once. DB writes happen on a dedicated background thread (see
+`Jorm::Db::Writer`), so a slow/unreachable GreptimeDB can't stall a
+proxied request -- errors are logged and swallowed.
+
+Example with dumps enabled too:
 
 ```bash
 JO_DUMP=1 bin/server
@@ -47,7 +84,8 @@ processes all append to that same file instead of each creating its own;
 writes are file-locked to keep concurrent appends from interleaving.
 
 Sensitive headers (`authorization`, `x-api-key`) and `sk-...` tokens in
-bodies are redacted in dump files only; forwarded traffic is unchanged.
+bodies are redacted before being recorded (both to GreptimeDB and to
+dump files); forwarded traffic is unchanged.
 
 ## Tests
 

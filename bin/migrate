@@ -1,0 +1,45 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Applies db/schema.sql to GreptimeDB. Idempotent (CREATE TABLE IF NOT
+# EXISTS), so it's safe to run every deploy. GreptimeDB can't ALTER a
+# TIME INDEX column once a table exists, so this isn't a full versioned
+# migration system -- for schema changes beyond adding new non-key
+# columns, you'd create a new table.
+
+require "pathname"
+require "pg"
+
+# Deliberately doesn't require lib/jorm/config -- that module also
+# requires JO_UPSTREAM_URL (the proxy's target), which has nothing to do
+# with applying the DB schema. Read the same GREPTIMEDB_* env vars
+# directly instead, so `bin/migrate` works standalone.
+host = ENV.fetch("GREPTIMEDB_HOST", "127.0.0.1")
+port = Integer(ENV.fetch("GREPTIMEDB_PORT", "4003"))
+dbname = ENV.fetch("GREPTIMEDB_DATABASE", "public")
+user = ENV["GREPTIMEDB_USER"]
+password = ENV["GREPTIMEDB_PASSWORD"]
+
+root = Pathname(__dir__).join("..").expand_path
+schema_path = root.join("db", "schema.sql")
+sql = File.read(schema_path)
+
+conn = PG.connect(host: host, port: port, dbname: dbname, user: user, password: password)
+
+begin
+  puts "Connected to GreptimeDB at #{host}:#{port}/#{dbname}"
+
+  # Strip "--" line comments before splitting on statement-terminating
+  # semicolons, so a stray ";" inside a comment can't truncate a statement.
+  sql_without_comments = sql.gsub(/--.*$/, "")
+  statements = sql_without_comments.split(";").map(&:strip).reject(&:empty?)
+
+  statements.each do |statement|
+    puts "Running: #{statement.lines.first.strip}..."
+    conn.exec(statement)
+  end
+
+  puts "Migration complete (#{statements.size} statement(s))."
+ensure
+  conn&.close
+end

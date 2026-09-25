@@ -6,10 +6,10 @@ require "time"
 require "pathname"
 
 module Jorm
-  # Persists request/response traffic to disk for debugging, and redacts
-  # sensitive data before writing. TeeBody hands it the collected response
-  # chunks once a streamed body has finished; Recorder turns those chunks
-  # into the on-disk record.
+  # Persists request/response traffic to a JSONL file for debugging,
+  # redacting sensitive data before writing (see Jorm::Redactor). TeeBody
+  # hands it the collected response chunks once a streamed body has
+  # finished; Recorder turns those chunks into the on-disk record.
   #
   # Every request/response record is appended to a single dump file as a
   # line of JSON (JSONL). The filename is normally supplied by bin/server
@@ -18,6 +18,9 @@ module Jorm
   # config.ru and build their own Recorder -- share one file instead of
   # each creating its own. Writes are flock-protected so concurrent
   # processes/fibers appending at the same time don't interleave lines.
+  #
+  # Off by default -- opt in with JO_DUMP=1. See Jorm::DbRecorder for the
+  # GreptimeDB recorder, which is on by default.
   class Recorder
     attr_reader :file_path
 
@@ -28,7 +31,6 @@ module Jorm
     )
       @enabled = enabled
       @dir = Pathname(dir)
-      @record_response = record_response
 
       if @enabled
         ensure_dir!
@@ -43,22 +45,15 @@ module Jorm
     end
 
     def redact_headers(headers)
-      redacted = {}
-
-      headers.each do |name, value|
-        lower = name.to_s.downcase
-        if lower == "x-api-key" || lower == "authorization"
-          redacted[name] = "***redacted***"
-        elsif !value.nil?
-          redacted[name] = value
-        end
-      end
-
-      redacted
+      Redactor.redact_headers(headers)
     end
 
     def redact_body_text(text)
-      text.gsub(/sk-[A-Za-z0-9_-]{6,}/, "sk-***redacted***")
+      Redactor.redact_body_text(text)
+    end
+
+    def parse_body(raw_bytes, content_type)
+      Redactor.parse_body(raw_bytes, content_type)
     end
 
     # Builds and writes the request portion of a record (headers / body /
@@ -128,19 +123,6 @@ module Jorm
       end
 
       puts "  \u{1F4C4} recorded #{type} \u2192 #{@file_path}"
-    end
-
-    def parse_body(raw_bytes, content_type)
-      return nil if raw_bytes.nil? || raw_bytes.empty?
-
-      raw = redact_body_text(raw_bytes.dup.force_encoding("UTF-8"))
-      if content_type.to_s.include?("application/json")
-        JSON.parse(raw)
-      else
-        raw
-      end
-    rescue JSON::ParserError
-      raw
     end
 
     private

@@ -27,5 +27,33 @@ module Jorm
     def record_file
       ENV["JO_DUMP_FILE"]
     end
+
+    # DB recording (GreptimeDB) is on by default -- set JO_DB_RECORD=0 /
+    # false to disable it (e.g. when GreptimeDB isn't available).
+    def db_record_enabled?
+      !%w[false 0].include?(ENV["JO_DB_RECORD"].to_s.downcase)
+    end
+
+    # Connection settings for GreptimeDB's PostgreSQL wire protocol,
+    # matching docker-compose.yml's default `standalone` service.
+    def greptimedb_host
+      ENV.fetch("GREPTIMEDB_HOST", "127.0.0.1")
+    end
+
+    def greptimedb_port
+      Integer(ENV.fetch("GREPTIMEDB_PORT", "4003"))
+    end
+
+    def greptimedb_database
+      ENV.fetch("GREPTIMEDB_DATABASE", "public")
+    end
+
+    def greptimedb_user
+      ENV["GREPTIMEDB_USER"]
+    end
+
+    def greptimedb_password
+      ENV["GREPTIMEDB_PASSWORD"]
+    end
   end
 end
