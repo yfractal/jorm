@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Rails-style db:reset for GreptimeDB: DROP DATABASE, recreate it, then
+# apply db/schema.sql via bin/migrate. Destroys all recorded traffic in
+# GREPTIMEDB_DATABASE (default: jorm).
+
+require "pathname"
+require "pg"
+
+host = ENV.fetch("GREPTIMEDB_HOST", "127.0.0.1")
+port = Integer(ENV.fetch("GREPTIMEDB_PORT", "4003"))
+dbname = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
+user = ENV["GREPTIMEDB_USER"]
+password = ENV["GREPTIMEDB_PASSWORD"]
+
+raise ArgumentError, "invalid GREPTIMEDB_DATABASE: #{dbname.inspect}" unless dbname.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+
+# Never drop GreptimeDB's built-in catalogs.
+protected = %w[public information_schema greptime_private]
+if protected.include?(dbname)
+  abort "Refusing to reset protected database #{dbname.inspect}. Set GREPTIMEDB_DATABASE to something else (default: jorm)."
+end
+
+bootstrap = PG.connect(host: host, port: port, dbname: "public", user: user, password: password)
+begin
+  puts "Dropping database #{dbname.inspect}..."
+  bootstrap.exec("DROP DATABASE IF EXISTS #{dbname}")
+  puts "Creating database #{dbname.inspect}..."
+  bootstrap.exec("CREATE DATABASE #{dbname}")
+ensure
+  bootstrap.close
+end
+
+migrate = Pathname(__dir__).join("migrate").expand_path
+puts "Applying schema via #{migrate}..."
+load migrate

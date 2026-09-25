@@ -27,6 +27,15 @@ at `http://localhost:4000/dashboard`). `bin/migrate` creates the
 (idempotent -- safe to re-run) via GreptimeDB's PostgreSQL wire
 protocol (port 4003).
 
+To wipe everything and start fresh (like Rails `db:reset`):
+
+```bash
+bin/db_reset
+```
+
+That drops `GREPTIMEDB_DATABASE` (default `jorm`), recreates it, and
+re-runs `bin/migrate`. All recorded traffic in that database is lost.
+
 If GreptimeDB isn't available, set `JO_DB_RECORD=0` to disable DB
 recording instead.
 
