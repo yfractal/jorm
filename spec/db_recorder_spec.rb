@@ -28,12 +28,12 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#record_request" do
-    it "inserts a redacted row into requests" do
+    it "inserts a redacted row into requests, without recording the body" do
       req = build_req("HTTP_AUTHORIZATION" => "Bearer sk-secret")
 
       expect(connection).to receive(:exec_params) do |sql, params|
         expect(sql).to include("INSERT INTO requests")
-        id, jorm_request_id, method, path, upstream_path, patched, headers, body = params
+        id, jorm_request_id, method, path, upstream_path, patched, headers = params
         expect(id).to match(/\A[0-9a-f-]{36}\z/)
         expect(id).not_to eq(req.jorm_request_id)
         expect(jorm_request_id).to eq(req.jorm_request_id)
@@ -42,7 +42,6 @@ RSpec.describe Jorm::DbRecorder do
         expect(upstream_path).to eq(Jorm::UpstreamClient.upstream_path(req))
         expect(patched).to eq(true)
         expect(headers).to include("***redacted***")
-        expect(body).to eq('{"key":"sk-***redacted***"}')
       end
 
       recorder.record_request(req, '{"key":"sk-abcdefghijk"}', true)
@@ -50,7 +49,7 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#maybe_record_response" do
-    it "inserts one row per chunk, with status/headers only on the first" do
+    it "inserts a single redacted row into responses, without recording the body" do
       req = build_req
       upstream_result = Jorm::UpstreamClient::Result.new(
         status: 200,
@@ -58,27 +57,19 @@ RSpec.describe Jorm::DbRecorder do
       )
 
       inserted = []
-      allow(connection).to receive(:exec_params) do |_sql, params|
+      allow(connection).to receive(:exec_params) do |sql, params|
+        expect(sql).to include("INSERT INTO responses")
         inserted << params
       end
 
       recorder.maybe_record_response(req, ["chunk-one", "chunk-two"], upstream_result)
 
-      expect(inserted.size).to eq(2)
+      expect(inserted.size).to eq(1)
 
-      _id0, jorm_request_id0, index0, status0, headers0, body0 = inserted[0]
-      expect(jorm_request_id0).to eq(req.jorm_request_id)
-      expect(index0).to eq(0)
-      expect(status0).to eq(200)
-      expect(headers0).to include("***redacted***")
-      expect(body0).to eq("chunk-one")
-
-      _id1, jorm_request_id1, index1, status1, headers1, body1 = inserted[1]
-      expect(jorm_request_id1).to eq(req.jorm_request_id)
-      expect(index1).to eq(1)
-      expect(status1).to be_nil
-      expect(headers1).to be_nil
-      expect(body1).to eq("chunk-two")
+      _id, jorm_request_id, status, headers = inserted[0]
+      expect(jorm_request_id).to eq(req.jorm_request_id)
+      expect(status).to eq(200)
+      expect(headers).to include("***redacted***")
     end
   end
 
