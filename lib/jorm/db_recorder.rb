@@ -18,15 +18,20 @@ module Jorm
   # "response_chunks" -- status/headers are only stored on the chunk_index
   # = 0 row, since GreptimeDB has no notion of a single parent row you
   # could update later once headers become known.
+  #
+  # Each requests row has its own "id" (UUID generated here -- GreptimeDB
+  # has no SERIAL/IDENTITY) plus "jorm_request_id" (from the Request),
+  # which response_chunks join on.
   class DbRecorder
     INSERT_REQUEST_SQL = <<~SQL.freeze
-      INSERT INTO requests ("id", "method", "path", "upstream_path", "patched", "headers", "body")
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO requests
+        ("id", "jorm_request_id", "method", "path", "upstream_path", "patched", "headers", "body")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     SQL
 
     INSERT_RESPONSE_CHUNK_SQL = <<~SQL.freeze
       INSERT INTO response_chunks
-        ("id", "request_id", "chunk_index", "status", "headers", "body")
+        ("id", "jorm_request_id", "chunk_index", "status", "headers", "body")
       VALUES ($1, $2, $3, $4, $5, $6)
     SQL
 
@@ -47,7 +52,8 @@ module Jorm
     def record_request(req, body_buffer, patched)
       return unless enabled?
 
-      id = req.jorm_request_id
+      id = SecureRandom.uuid
+      jorm_request_id = req.jorm_request_id
       method = req.method
       path = req.path_with_query_string
       upstream_path = Jorm::UpstreamClient.upstream_path(req)
@@ -55,14 +61,17 @@ module Jorm
       body = Redactor.redact_body_text(body_buffer.to_s)
 
       @writer.enqueue do
-        @connection.exec_params(INSERT_REQUEST_SQL, [id, method, path, upstream_path, patched, headers, body])
+        @connection.exec_params(
+          INSERT_REQUEST_SQL,
+          [id, jorm_request_id, method, path, upstream_path, patched, headers, body]
+        )
       end
     end
 
     def maybe_record_response(req, chunks, upstream_result)
       return unless enabled?
 
-      request_id = req.jorm_request_id
+      jorm_request_id = req.jorm_request_id
 
       headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
         v.is_a?(Array) ? v.join(", ") : v.to_s
@@ -79,7 +88,7 @@ module Jorm
         @writer.enqueue do
           @connection.exec_params(
             INSERT_RESPONSE_CHUNK_SQL,
-            [id, request_id, index, chunk_status, chunk_headers, body]
+            [id, jorm_request_id, index, chunk_status, chunk_headers, body]
           )
         end
       end

@@ -33,8 +33,10 @@ RSpec.describe Jorm::DbRecorder do
 
       expect(connection).to receive(:exec_params) do |sql, params|
         expect(sql).to include("INSERT INTO requests")
-        id, method, path, upstream_path, patched, headers, body = params
-        expect(id).to eq(req.jorm_request_id)
+        id, jorm_request_id, method, path, upstream_path, patched, headers, body = params
+        expect(id).to match(/\A[0-9a-f-]{36}\z/)
+        expect(id).not_to eq(req.jorm_request_id)
+        expect(jorm_request_id).to eq(req.jorm_request_id)
         expect(method).to eq("POST")
         expect(path).to eq("/v1/messages")
         expect(upstream_path).to eq(Jorm::UpstreamClient.upstream_path(req))
@@ -64,15 +66,15 @@ RSpec.describe Jorm::DbRecorder do
 
       expect(inserted.size).to eq(2)
 
-      _id0, request_id0, index0, status0, headers0, body0 = inserted[0]
-      expect(request_id0).to eq(req.jorm_request_id)
+      _id0, jorm_request_id0, index0, status0, headers0, body0 = inserted[0]
+      expect(jorm_request_id0).to eq(req.jorm_request_id)
       expect(index0).to eq(0)
       expect(status0).to eq(200)
       expect(headers0).to include("***redacted***")
       expect(body0).to eq("chunk-one")
 
-      _id1, request_id1, index1, status1, headers1, body1 = inserted[1]
-      expect(request_id1).to eq(req.jorm_request_id)
+      _id1, jorm_request_id1, index1, status1, headers1, body1 = inserted[1]
+      expect(jorm_request_id1).to eq(req.jorm_request_id)
       expect(index1).to eq(1)
       expect(status1).to be_nil
       expect(headers1).to be_nil
