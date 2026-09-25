@@ -226,67 +226,46 @@ def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_
   total_pages = [((total + per_page - 1) / per_page), 1].max
   page = page.clamp(1, total_pages)
   slice = sessions[((page - 1) * per_page), per_page] || []
+  filters_active = !(from_raw.to_s.empty? && to_raw.to_s.empty?) || per_page != DEFAULT_PER_PAGE
 
-  base_params = {
-    from: from_raw,
-    to: to_raw,
-    per_page: per_page.to_s
-  }
+  grand_total_cost = sessions.sum { |s| s["total_cost"] }
+  grand_total_requests = sessions.sum { |s| s["requests"].size }
 
-  prev_link = if page > 1
-                "<a href=\"/#{h(query_string(base_params.merge(page: (page - 1).to_s)))}\">← Prev</a>"
-              else
-                "<span class=\"disabled\">← Prev</span>"
-              end
-  next_link = if page < total_pages
-                "<a href=\"/#{h(query_string(base_params.merge(page: (page + 1).to_s)))}\">Next →</a>"
-              else
-                "<span class=\"disabled\">Next →</span>"
-              end
+  base_params = { from: from_raw, to: to_raw, per_page: per_page.to_s }
 
-  session_rows = slice.map do |s|
-    req_rows = s["requests"].map do |r|
+  prev_link = pager_link(base_params, page - 1, "← Prev", enabled: page > 1)
+  next_link = pager_link(base_params, page + 1, "Next →", enabled: page < total_pages)
+
+  session_rows = slice.map { |s| render_session_row(s) }.join
+
+  body_html =
+    if error
+      render_error_state(error)
+    elsif slice.empty?
+      render_empty_state(filters_active: filters_active)
+    else
       <<~HTML
-        <tr>
-          <td class="mono">#{h(format_ts(r["time"]))}</td>
-          <td class="content">#{h(r["content"])}</td>
-          <td class="num">#{h(format_cost(r["cost"]))}</td>
-        </tr>
+        <table>
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Created</th>
+              <th>Last message</th>
+              <th class="num">Requests</th>
+              <th class="num">Total cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            #{session_rows}
+          </tbody>
+        </table>
+
+        <nav class="pager" aria-label="Session pages">
+          <div class="pager-links">#{prev_link}#{next_link}</div>
+          <div class="pager-status">Page #{page} of #{total_pages} · #{total} session#{"s" unless total == 1}</div>
+        </nav>
       HTML
-    end.join
-
-    <<~HTML
-      <tr class="session">
-        <td class="mono">#{h(s["session_id"])}</td>
-        <td class="mono">#{h(format_ts(s["created_at"]))}</td>
-        <td class="mono">#{h(format_ts(s["last_message_at"]))}</td>
-        <td class="num">#{s["requests"].size}</td>
-        <td class="num">#{h(format_cost(s["total_cost"]))}</td>
-      </tr>
-      <tr class="detail">
-        <td colspan="5">
-          <details>
-            <summary>#{s["requests"].size} request(s) — click to expand</summary>
-            <table class="inner">
-              <thead>
-                <tr><th>Time</th><th>Content (200 chars)</th><th>Cost</th></tr>
-              </thead>
-              <tbody>
-                #{req_rows}
-              </tbody>
-            </table>
-          </details>
-        </td>
-      </tr>
-    HTML
-  end.join
-
-  error_html = error ? %(<p class="error">#{h(error)}</p>) : ""
-  empty_html = if error.nil? && slice.empty?
-                 %(<tr><td colspan="5" class="empty">No sessions found.</td></tr>)
-               else
-                 ""
-               end
+    end
 
   <<~HTML
     <!DOCTYPE html>
@@ -294,93 +273,291 @@ def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>jorm — session costs (OpenRouter)</title>
-      <style>
-        :root { color-scheme: light dark; }
-        body {
-          font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-          margin: 1.5rem auto;
-          max-width: 1100px;
-          padding: 0 1rem;
-          line-height: 1.4;
-        }
-        h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-        .note { color: #666; font-size: 0.9rem; margin-bottom: 1.25rem; }
-        form.filter {
-          display: flex; flex-wrap: wrap; gap: 0.75rem 1rem;
-          align-items: end; margin-bottom: 1.25rem;
-          padding: 0.75rem 1rem; border: 1px solid #ccc; border-radius: 6px;
-        }
-        form.filter label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
-        form.filter input { padding: 0.3rem 0.4rem; font: inherit; }
-        form.filter button { padding: 0.4rem 0.9rem; cursor: pointer; }
-        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-        th, td { border-bottom: 1px solid #ddd; padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
-        th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; }
-        tr.session td { font-weight: 500; }
-        tr.detail td { background: transparent; border-bottom: 2px solid #ccc; padding-top: 0; padding-bottom: 0.75rem; }
-        table.inner { margin-top: 0.5rem; font-size: 0.85rem; }
-        table.inner th { background: transparent; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
-        .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .content { max-width: 40em; word-break: break-word; }
-        .empty { text-align: center; color: #888; padding: 1.5rem; }
-        .error { color: #b00020; background: #fdecea; padding: 0.75rem 1rem; border-radius: 4px; }
-        .pager {
-          display: flex; justify-content: space-between; align-items: center;
-          margin-top: 1rem; font-size: 0.9rem;
-        }
-        .pager a { text-decoration: none; }
-        .pager .disabled { color: #aaa; }
-        details summary { cursor: pointer; color: #336; font-size: 0.85rem; }
-      </style>
+      <title>Session costs — jorm</title>
+      <style>#{PAGE_CSS}</style>
     </head>
     <body>
-      <h1>Claude Code session costs</h1>
-      <p class="note">
-        OpenRouter only — cost is read from <code>usage.cost</code> on recorded responses.
-        Filter by request time; pagination is over sessions (most recent last-message first).
-      </p>
+      <header class="page-header">
+        <h1>Claude Code session costs</h1>
+        <p class="subtitle">
+          Cost is read from OpenRouter's <code>usage.cost</code> field, grouped by Claude Code session.
+          Only meaningful when the upstream is OpenRouter.
+        </p>
+      </header>
+
+      <section class="stats" aria-label="Summary">
+        <div class="stat">
+          <span class="stat-value">#{total}</span>
+          <span class="stat-label">Session#{"s" unless total == 1}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">#{grand_total_requests}</span>
+          <span class="stat-label">Request#{"s" unless grand_total_requests == 1}</span>
+        </div>
+        <div class="stat stat-primary">
+          <span class="stat-value">#{h(format_cost(grand_total_cost))}</span>
+          <span class="stat-label">Total cost</span>
+        </div>
+      </section>
 
       <form class="filter" method="get" action="/">
-        <label>From
-          <input type="datetime-local" name="from" value="#{h(datetime_local_value(from_time) || from_raw.to_s)}">
-        </label>
-        <label>To
-          <input type="datetime-local" name="to" value="#{h(datetime_local_value(to_time) || to_raw.to_s)}">
-        </label>
-        <label>Per page
-          <input type="number" name="per_page" min="1" max="100" value="#{per_page}">
-        </label>
-        <button type="submit">Apply</button>
+        <div class="field">
+          <label for="from">From</label>
+          <input id="from" type="datetime-local" name="from" value="#{h(datetime_local_value(from_time) || from_raw.to_s)}">
+        </div>
+        <div class="field">
+          <label for="to">To</label>
+          <input id="to" type="datetime-local" name="to" value="#{h(datetime_local_value(to_time) || to_raw.to_s)}">
+        </div>
+        <div class="field field-narrow">
+          <label for="per_page">Per page</label>
+          <input id="per_page" type="number" name="per_page" min="1" max="100" value="#{per_page}">
+        </div>
+        <div class="field field-actions">
+          <button type="submit" class="btn btn-primary">Apply filters</button>
+          #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
+        </div>
       </form>
 
-      #{error_html}
-
-      <table>
-        <thead>
-          <tr>
-            <th>Session ID</th>
-            <th>Created</th>
-            <th>Last message</th>
-            <th># Reqs</th>
-            <th>Total cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          #{session_rows}
-          #{empty_html}
-        </tbody>
-      </table>
-
-      <div class="pager">
-        <div>#{prev_link} &nbsp; #{next_link}</div>
-        <div>Page #{page} of #{total_pages} · #{total} session#{total == 1 ? "" : "s"}</div>
-      </div>
+      <main>
+        #{body_html}
+      </main>
     </body>
     </html>
   HTML
 end
+
+def pager_link(base_params, target_page, label, enabled:)
+  if enabled
+    "<a class=\"btn btn-ghost\" href=\"/#{h(query_string(base_params.merge(page: target_page.to_s)))}\">#{label}</a>"
+  else
+    "<span class=\"btn btn-ghost\" aria-disabled=\"true\">#{label}</span>"
+  end
+end
+
+def render_session_row(s)
+  req_rows = s["requests"].map do |r|
+    <<~HTML
+      <tr>
+        <td class="mono time-cell">#{h(format_ts(r["time"]))}</td>
+        <td class="content-cell">#{h(r["content"])}</td>
+        <td class="num #{cost_class(r["cost"])}">#{h(format_cost(r["cost"]))}</td>
+      </tr>
+    HTML
+  end.join
+
+  request_count = s["requests"].size
+
+  <<~HTML
+    <tr class="session-row">
+      <td class="mono session-id" title="#{h(s["session_id"])}">#{h(s["session_id"])}</td>
+      <td class="mono">#{h(format_ts(s["created_at"]))}</td>
+      <td class="mono">#{h(format_ts(s["last_message_at"]))}</td>
+      <td class="num">#{request_count}</td>
+      <td class="num #{cost_class(s["total_cost"])}">#{h(format_cost(s["total_cost"]))}</td>
+    </tr>
+    <tr class="detail-row">
+      <td colspan="5">
+        <details>
+          <summary>View #{request_count} request#{"s" unless request_count == 1}</summary>
+          <table class="inner-table">
+            <thead>
+              <tr><th>Time</th><th>Content (first 200 chars)</th><th class="num">Cost</th></tr>
+            </thead>
+            <tbody>
+              #{req_rows}
+            </tbody>
+          </table>
+        </details>
+      </td>
+    </tr>
+  HTML
+end
+
+def cost_class(cost)
+  cost.nil? ? "cost-unknown" : ""
+end
+
+def render_empty_state(filters_active:)
+  message = filters_active ? "No sessions match these filters." : "No sessions recorded yet."
+  hint = filters_active ? "Try widening the time range or clearing filters." : "Traffic recorded through jorm will show up here."
+
+  <<~HTML
+    <div class="state-panel">
+      <p class="state-title">#{h(message)}</p>
+      <p class="state-hint">#{h(hint)}</p>
+      #{'<a href="/" class="btn btn-ghost">Reset filters</a>' if filters_active}
+    </div>
+  HTML
+end
+
+def render_error_state(error)
+  <<~HTML
+    <div class="state-panel state-panel-error">
+      <p class="state-title">Couldn't load session data</p>
+      <p class="state-hint">#{h(error)}</p>
+      <p class="state-hint">Check that GreptimeDB is running and reachable at the configured host/port.</p>
+    </div>
+  HTML
+end
+
+PAGE_CSS = <<~CSS
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0 auto;
+    max-width: 1080px;
+    padding: 2rem 1.25rem 3rem;
+    line-height: 1.45;
+    color: #1a1a1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6e6e6; }
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    background: rgba(127, 127, 127, 0.15);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+  }
+
+  .page-header { margin-bottom: 1.5rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.35rem; }
+  .subtitle { color: #666; font-size: 0.9rem; margin: 0; max-width: 60em; }
+
+  .stats { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .stat {
+    flex: 1 1 140px;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .stat-primary { border-color: #2563eb; background: rgba(37, 99, 235, 0.06); }
+  .stat-value { font-size: 1.4rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 0.78rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  form.filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: end;
+    margin-bottom: 1.75rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.3rem; }
+  .field label { font-size: 0.78rem; font-weight: 600; color: #555; }
+  .field input {
+    padding: 0.45rem 0.55rem;
+    font: inherit;
+    font-size: 0.9rem;
+    border: 1px solid rgba(127, 127, 127, 0.4);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+  }
+  .field input:focus { outline: 2px solid #2563eb; outline-offset: 1px; }
+  .field-narrow input { width: 6rem; }
+  .field-actions { flex-direction: row; gap: 0.5rem; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1;
+  }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-ghost {
+    background: transparent;
+    border-color: rgba(127, 127, 127, 0.4);
+    color: inherit;
+  }
+  .btn-ghost:hover { background: rgba(127, 127, 127, 0.12); }
+  .btn[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { padding: 0.55rem 0.6rem; text-align: left; vertical-align: top; }
+  thead th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #666;
+    border-bottom: 2px solid rgba(127, 127, 127, 0.3);
+  }
+  .session-row td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); font-weight: 500; }
+  .session-row:hover td { background: rgba(127, 127, 127, 0.06); }
+  .detail-row td {
+    padding-top: 0;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+  }
+  .session-id { max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .inner-table { margin-top: 0.6rem; font-size: 0.85rem; }
+  .inner-table th { border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
+  .inner-table td { border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
+  .time-cell { white-space: nowrap; }
+  .content-cell { max-width: 42em; word-break: break-word; color: #444; }
+  @media (prefers-color-scheme: dark) { .content-cell { color: #ccc; } }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cost-unknown { color: #999; }
+
+  details summary {
+    cursor: pointer;
+    color: #2563eb;
+    font-size: 0.85rem;
+    font-weight: 500;
+    list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▸ "; }
+  details[open] summary::before { content: "▾ "; }
+
+  .state-panel {
+    text-align: center;
+    padding: 3rem 1.5rem;
+    border: 1px dashed rgba(127, 127, 127, 0.35);
+    border-radius: 8px;
+  }
+  .state-panel-error { border-color: #dc2626; background: rgba(220, 38, 38, 0.06); }
+  .state-title { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.4rem; }
+  .state-hint { color: #666; font-size: 0.88rem; margin: 0 0 1rem; }
+  .state-panel .btn { margin-top: 0.25rem; }
+
+  .pager {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.25rem;
+    font-size: 0.88rem;
+  }
+  .pager-links { display: flex; gap: 0.5rem; }
+  .pager-status { color: #666; }
+
+  @media (max-width: 640px) {
+    .stats { flex-direction: column; }
+    form.filter { flex-direction: column; align-items: stretch; }
+    .field-narrow input { width: 100%; }
+    .field-actions { flex-direction: column; }
+    .pager { flex-direction: column; gap: 0.75rem; align-items: stretch; text-align: center; }
+  }
+CSS
 
 # ---------------------------------------------------------------------------
 # Server
