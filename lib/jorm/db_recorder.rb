@@ -74,6 +74,10 @@ module Jorm
       end
     end
 
+    # Mirrors how Jorm::Recorder builds its "res" record's body: parsed
+    # (and re-serialized, since "body" is a STRING column) when the
+    # content-type says JSON, left as redacted raw text otherwise, and
+    # nil for an empty body -- rather than always storing raw chunk text.
     def maybe_record_response(req, chunks, upstream_result)
       return unless enabled?
 
@@ -85,7 +89,9 @@ module Jorm
         v.is_a?(Array) ? v.join(", ") : v.to_s
       end
       redacted_headers = JSON.generate(Redactor.redact_headers(headers))
-      body = Redactor.redact_body_text(chunks.join.dup.force_encoding("UTF-8").scrub)
+      raw_body = chunks.join.dup.force_encoding("UTF-8").scrub
+      parsed_body = Redactor.parse_body(raw_body, headers["content-type"])
+      body = parsed_body.is_a?(String) ? parsed_body : JSON.generate(parsed_body) unless parsed_body.nil?
 
       @writer.enqueue do
         @connection.exec_params(

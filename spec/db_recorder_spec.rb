@@ -54,28 +54,54 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#maybe_record_response" do
-    it "inserts a single redacted row into responses, with the joined body" do
+    def capture_response_body(req, chunks, upstream_result)
+      inserted = nil
+      allow(connection).to receive(:exec_params) do |sql, params|
+        expect(sql).to include("INSERT INTO responses")
+        inserted = params
+      end
+
+      recorder.maybe_record_response(req, chunks, upstream_result)
+      inserted
+    end
+
+    it "parses and re-redacts a JSON response body, like the file recorder" do
       req = build_req
       upstream_result = Jorm::UpstreamClient::Result.new(
         status: 200,
         headers: { "content-type" => "application/json", "authorization" => "Bearer sk-secret" }
       )
 
-      inserted = []
-      allow(connection).to receive(:exec_params) do |sql, params|
-        expect(sql).to include("INSERT INTO responses")
-        inserted << params
-      end
+      params = capture_response_body(req, ['{"key":"sk-', 'abcdefghijk"}'], upstream_result)
+      _id, jorm_request_id, status, headers, body = params
 
-      recorder.maybe_record_response(req, ["chunk-one ", "sk-abcdefghijk"], upstream_result)
-
-      expect(inserted.size).to eq(1)
-
-      _id, jorm_request_id, status, headers, body = inserted[0]
       expect(jorm_request_id).to eq(req.jorm_request_id)
       expect(status).to eq(200)
       expect(headers).to include("***redacted***")
+      expect(body).to eq('{"key":"sk-***redacted***"}')
+    end
+
+    it "keeps a non-JSON response body as redacted raw text" do
+      req = build_req
+      upstream_result = Jorm::UpstreamClient::Result.new(
+        status: 200,
+        headers: { "content-type" => "text/event-stream" }
+      )
+
+      params = capture_response_body(req, ["chunk-one ", "sk-abcdefghijk"], upstream_result)
+      body = params.last
+
       expect(body).to eq("chunk-one sk-***redacted***")
+    end
+
+    it "records nil for an empty response body" do
+      req = build_req
+      upstream_result = Jorm::UpstreamClient::Result.new(status: 204, headers: {})
+
+      params = capture_response_body(req, [], upstream_result)
+      body = params.last
+
+      expect(body).to be_nil
     end
   end
 
