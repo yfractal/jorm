@@ -27,8 +27,8 @@ curl http://127.0.0.1:8787/health
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROXY_HOST` | `127.0.0.1` | Bind host |
-| `PROXY_PORT` | `8787` | Bind port |
+| `JO_PROXY_HOST` | `127.0.0.1` | Bind host |
+| `JO_PROXY_PORT` | `8787` | Bind port |
 | `JO_DUMP` | off | Set to `1`/`true` to record traffic to a dump file |
 | `JO_DUMP_DIR` | `./dumps` | Dump output directory |
 | `JO_DUMP_RESPONSE` | off | Also capture upstream response bodies |

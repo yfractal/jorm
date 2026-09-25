@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-HOST="${PROXY_HOST:-127.0.0.1}"
-PORT="${PROXY_PORT:-8787}"
+HOST="${JO_PROXY_HOST:-127.0.0.1}"
+PORT="${JO_PROXY_PORT:-8787}"
 
 echo "DeepSeek Auto Mode proxy: http://${HOST}:${PORT}"
 echo "Upstream: https://api.deepseek.com/anthropic"
