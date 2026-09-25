@@ -1,0 +1,436 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Serves a small HTML report of per-Claude-Code-session cost (OpenRouter only).
+#
+# Cost comes from OpenRouter's usage.cost extension field on reassembled
+# response bodies (not present in Anthropic's native API), so this only
+# reports meaningful numbers when JO_UPSTREAM_URL points at OpenRouter.
+#
+# Talks to GreptimeDB's HTTP SQL API (default :4000) rather than the
+# Postgres wire protocol bin/migrate / DbRecorder use, so this script
+# needs no `pg` gem -- only Ruby stdlib + WEBrick (a bundled default gem,
+# not a Gemfile dependency; no `bundle install` required).
+#
+# Usage:
+#   bin/session_costs
+#   JO_REPORT_PORT=5000 bin/session_costs
+# Then open http://127.0.0.1:4890/
+
+require "cgi"
+require "json"
+require "net/http"
+require "time"
+require "uri"
+require "webrick"
+
+REPORT_HOST = ENV.fetch("JO_REPORT_HOST", "127.0.0.1")
+REPORT_PORT = Integer(ENV.fetch("JO_REPORT_PORT", "4890"))
+GREPTIME_HOST = ENV.fetch("GREPTIMEDB_HTTP_HOST", "127.0.0.1")
+GREPTIME_PORT = Integer(ENV.fetch("GREPTIMEDB_HTTP_PORT", "4000"))
+GREPTIME_DB = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
+
+DEFAULT_PER_PAGE = 10
+CONTENT_PREVIEW_LEN = 200
+
+# ---------------------------------------------------------------------------
+# GreptimeDB HTTP SQL client
+# ---------------------------------------------------------------------------
+
+def sql_query(sql)
+  uri = URI("http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql")
+  uri.query = URI.encode_www_form(db: GREPTIME_DB, sql: sql)
+
+  response = Net::HTTP.get_response(uri)
+  raise "GreptimeDB HTTP #{response.code}: #{response.body[0, 500]}" unless response.is_a?(Net::HTTPSuccess)
+
+  data = JSON.parse(response.body)
+  records = data.dig("output", 0, "records")
+  return [] unless records
+
+  columns = records.dig("schema", "column_schemas")&.map { |c| c["name"] } || []
+  (records["rows"] || []).map { |row| columns.zip(row).to_h }
+end
+
+def sql_literal(value)
+  "'#{value.to_s.gsub("'", "''")}'"
+end
+
+def parse_time_param(raw)
+  return nil if raw.nil? || raw.strip.empty?
+
+  Time.parse(raw)
+rescue ArgumentError
+  nil
+end
+
+def format_ts(ms_or_time)
+  return "—" if ms_or_time.nil?
+
+  t = case ms_or_time
+      when Integer then Time.at(ms_or_time / 1000.0).utc
+      when Time then ms_or_time.utc
+      else
+        begin
+          Time.parse(ms_or_time.to_s).utc
+        rescue ArgumentError
+          return ms_or_time.to_s
+        end
+      end
+  t.strftime("%Y-%m-%d %H:%M:%S UTC")
+end
+
+def format_cost(cost)
+  return "—" if cost.nil?
+
+  format("$%.6f", cost)
+end
+
+# ---------------------------------------------------------------------------
+# Row parsing / session grouping
+# ---------------------------------------------------------------------------
+
+def flatten_content(content)
+  case content
+  when String
+    content
+  when Array
+    content.filter_map do |block|
+      next unless block.is_a?(Hash)
+
+      block["text"] || block["thinking"]
+    end.join(" ")
+  else
+    content.to_s
+  end
+end
+
+def last_user_content(req_body)
+  return "" unless req_body.is_a?(Hash)
+
+  messages = req_body["messages"]
+  return "" unless messages.is_a?(Array)
+
+  last_user = messages.reverse.find { |m| m.is_a?(Hash) && m["role"] == "user" }
+  return "" unless last_user
+
+  flatten_content(last_user["content"])
+end
+
+def truncate(text, len = CONTENT_PREVIEW_LEN)
+  text = text.to_s.gsub(/\s+/, " ").strip
+  return text if text.length <= len
+
+  "#{text[0, len]}…"
+end
+
+def parse_json_maybe(value)
+  case value
+  when Hash, Array then value
+  when String
+    return nil if value.empty?
+
+    JSON.parse(value)
+  end
+rescue JSON::ParserError
+  nil
+end
+
+def fetch_rows(from_time:, to_time:)
+  clauses = ["r.path LIKE '/v1/messages%'"]
+  clauses << "r.created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
+  clauses << "r.created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+
+  sql = <<~SQL
+    SELECT r.jorm_request_id, r.created_at AS req_time, r.headers, r.body AS req_body,
+           resp.created_at AS resp_time, resp.body AS resp_body
+    FROM requests r
+    LEFT JOIN responses resp ON r.jorm_request_id = resp.jorm_request_id
+    WHERE #{clauses.join(" AND ")}
+    ORDER BY r.created_at ASC
+  SQL
+
+  sql_query(sql)
+end
+
+def group_sessions(rows)
+  sessions = {}
+
+  rows.each do |row|
+    headers = parse_json_maybe(row["headers"]) || {}
+    session_id = headers["x-claude-code-session-id"].to_s
+    session_id = "(unknown)" if session_id.empty?
+
+    req_body = parse_json_maybe(row["req_body"])
+    resp_body = parse_json_maybe(row["resp_body"])
+
+    content = truncate(last_user_content(req_body))
+    cost = resp_body&.dig("usage", "cost")
+    cost = cost.nil? ? nil : cost.to_f
+
+    req_time = row["req_time"]
+    resp_time = row["resp_time"]
+    last_time = resp_time || req_time
+
+    session = sessions[session_id] ||= {
+      "session_id" => session_id,
+      "created_at" => req_time,
+      "last_message_at" => last_time,
+      "requests" => [],
+      "total_cost" => 0.0
+    }
+
+    if req_time && (session["created_at"].nil? || req_time < session["created_at"])
+      session["created_at"] = req_time
+    end
+    if last_time && (session["last_message_at"].nil? || last_time > session["last_message_at"])
+      session["last_message_at"] = last_time
+    end
+
+    session["requests"] << {
+      "time" => req_time,
+      "content" => content,
+      "cost" => cost
+    }
+    session["total_cost"] += cost if cost
+  end
+
+  sessions.values.sort_by { |s| -(s["last_message_at"] || 0) }
+end
+
+# ---------------------------------------------------------------------------
+# HTML
+# ---------------------------------------------------------------------------
+
+def h(text)
+  CGI.escapeHTML(text.to_s)
+end
+
+def query_string(params)
+  pairs = params.compact.filter_map do |k, v|
+    next if v.nil? || v.to_s.empty?
+
+    "#{CGI.escape(k.to_s)}=#{CGI.escape(v.to_s)}"
+  end
+  pairs.empty? ? "" : "?#{pairs.join("&")}"
+end
+
+def datetime_local_value(time)
+  return nil unless time
+
+  time.getlocal.strftime("%Y-%m-%dT%H:%M")
+end
+
+def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_time:, error: nil)
+  total = sessions.size
+  total_pages = [((total + per_page - 1) / per_page), 1].max
+  page = page.clamp(1, total_pages)
+  slice = sessions[((page - 1) * per_page), per_page] || []
+
+  base_params = {
+    from: from_raw,
+    to: to_raw,
+    per_page: per_page.to_s
+  }
+
+  prev_link = if page > 1
+                "<a href=\"/#{h(query_string(base_params.merge(page: (page - 1).to_s)))}\">← Prev</a>"
+              else
+                "<span class=\"disabled\">← Prev</span>"
+              end
+  next_link = if page < total_pages
+                "<a href=\"/#{h(query_string(base_params.merge(page: (page + 1).to_s)))}\">Next →</a>"
+              else
+                "<span class=\"disabled\">Next →</span>"
+              end
+
+  session_rows = slice.map do |s|
+    req_rows = s["requests"].map do |r|
+      <<~HTML
+        <tr>
+          <td class="mono">#{h(format_ts(r["time"]))}</td>
+          <td class="content">#{h(r["content"])}</td>
+          <td class="num">#{h(format_cost(r["cost"]))}</td>
+        </tr>
+      HTML
+    end.join
+
+    <<~HTML
+      <tr class="session">
+        <td class="mono">#{h(s["session_id"])}</td>
+        <td class="mono">#{h(format_ts(s["created_at"]))}</td>
+        <td class="mono">#{h(format_ts(s["last_message_at"]))}</td>
+        <td class="num">#{s["requests"].size}</td>
+        <td class="num">#{h(format_cost(s["total_cost"]))}</td>
+      </tr>
+      <tr class="detail">
+        <td colspan="5">
+          <details>
+            <summary>#{s["requests"].size} request(s) — click to expand</summary>
+            <table class="inner">
+              <thead>
+                <tr><th>Time</th><th>Content (200 chars)</th><th>Cost</th></tr>
+              </thead>
+              <tbody>
+                #{req_rows}
+              </tbody>
+            </table>
+          </details>
+        </td>
+      </tr>
+    HTML
+  end.join
+
+  error_html = error ? %(<p class="error">#{h(error)}</p>) : ""
+  empty_html = if error.nil? && slice.empty?
+                 %(<tr><td colspan="5" class="empty">No sessions found.</td></tr>)
+               else
+                 ""
+               end
+
+  <<~HTML
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>jorm — session costs (OpenRouter)</title>
+      <style>
+        :root { color-scheme: light dark; }
+        body {
+          font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+          margin: 1.5rem auto;
+          max-width: 1100px;
+          padding: 0 1rem;
+          line-height: 1.4;
+        }
+        h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+        .note { color: #666; font-size: 0.9rem; margin-bottom: 1.25rem; }
+        form.filter {
+          display: flex; flex-wrap: wrap; gap: 0.75rem 1rem;
+          align-items: end; margin-bottom: 1.25rem;
+          padding: 0.75rem 1rem; border: 1px solid #ccc; border-radius: 6px;
+        }
+        form.filter label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+        form.filter input { padding: 0.3rem 0.4rem; font: inherit; }
+        form.filter button { padding: 0.4rem 0.9rem; cursor: pointer; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th, td { border-bottom: 1px solid #ddd; padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
+        th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; }
+        tr.session td { font-weight: 500; }
+        tr.detail td { background: transparent; border-bottom: 2px solid #ccc; padding-top: 0; padding-bottom: 0.75rem; }
+        table.inner { margin-top: 0.5rem; font-size: 0.85rem; }
+        table.inner th { background: transparent; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .content { max-width: 40em; word-break: break-word; }
+        .empty { text-align: center; color: #888; padding: 1.5rem; }
+        .error { color: #b00020; background: #fdecea; padding: 0.75rem 1rem; border-radius: 4px; }
+        .pager {
+          display: flex; justify-content: space-between; align-items: center;
+          margin-top: 1rem; font-size: 0.9rem;
+        }
+        .pager a { text-decoration: none; }
+        .pager .disabled { color: #aaa; }
+        details summary { cursor: pointer; color: #336; font-size: 0.85rem; }
+      </style>
+    </head>
+    <body>
+      <h1>Claude Code session costs</h1>
+      <p class="note">
+        OpenRouter only — cost is read from <code>usage.cost</code> on recorded responses.
+        Filter by request time; pagination is over sessions (most recent last-message first).
+      </p>
+
+      <form class="filter" method="get" action="/">
+        <label>From
+          <input type="datetime-local" name="from" value="#{h(datetime_local_value(from_time) || from_raw.to_s)}">
+        </label>
+        <label>To
+          <input type="datetime-local" name="to" value="#{h(datetime_local_value(to_time) || to_raw.to_s)}">
+        </label>
+        <label>Per page
+          <input type="number" name="per_page" min="1" max="100" value="#{per_page}">
+        </label>
+        <button type="submit">Apply</button>
+      </form>
+
+      #{error_html}
+
+      <table>
+        <thead>
+          <tr>
+            <th>Session ID</th>
+            <th>Created</th>
+            <th>Last message</th>
+            <th># Reqs</th>
+            <th>Total cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          #{session_rows}
+          #{empty_html}
+        </tbody>
+      </table>
+
+      <div class="pager">
+        <div>#{prev_link} &nbsp; #{next_link}</div>
+        <div>Page #{page} of #{total_pages} · #{total} session#{total == 1 ? "" : "s"}</div>
+      </div>
+    </body>
+    </html>
+  HTML
+end
+
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
+
+server = WEBrick::HTTPServer.new(
+  Host: REPORT_HOST,
+  Port: REPORT_PORT,
+  Logger: WEBrick::Log.new($stderr, WEBrick::Log::INFO),
+  AccessLog: [[$stderr, WEBrick::AccessLog::COMMON_LOG_FORMAT]]
+)
+
+server.mount_proc "/" do |req, res|
+  from_raw = req.query["from"].to_s
+  to_raw = req.query["to"].to_s
+  from_time = parse_time_param(from_raw)
+  to_time = parse_time_param(to_raw)
+  page = Integer(req.query["page"] || 1, exception: false) || 1
+  per_page = Integer(req.query["per_page"] || DEFAULT_PER_PAGE, exception: false) || DEFAULT_PER_PAGE
+  page = 1 if page < 1
+  per_page = DEFAULT_PER_PAGE if per_page < 1
+  per_page = 100 if per_page > 100
+
+  sessions = []
+  error = nil
+  begin
+    rows = fetch_rows(from_time: from_time, to_time: to_time)
+    sessions = group_sessions(rows)
+  rescue StandardError => e
+    error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
+    warn error
+  end
+
+  res.status = 200
+  res["Content-Type"] = "text/html; charset=utf-8"
+  res.body = render_page(
+    sessions: sessions,
+    page: page,
+    per_page: per_page,
+    from_raw: from_raw,
+    to_raw: to_raw,
+    from_time: from_time,
+    to_time: to_time,
+    error: error
+  )
+end
+
+trap("INT") { server.shutdown }
+trap("TERM") { server.shutdown }
+
+puts "jorm session costs → http://#{REPORT_HOST}:#{REPORT_PORT}/"
+puts "  GreptimeDB HTTP: http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql?db=#{GREPTIME_DB}"
+server.start
