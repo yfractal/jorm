@@ -19,23 +19,20 @@ module Jorm
   # TeeBody has collected the full stream (see Jorm::App), mirroring how
   # Jorm::Recorder writes a single "res" record to the dump file.
   #
-  # Bodies are never recorded here, only metadata (method/path/status/
-  # headers) -- use the (opt-in) file recorder for full bodies.
-  #
   # Each requests row has its own "id" (UUID generated here -- GreptimeDB
   # has no SERIAL/IDENTITY) plus "jorm_request_id" (from the Request),
   # which the responses row shares.
   class DbRecorder
     INSERT_REQUEST_SQL = <<~SQL.freeze
       INSERT INTO requests
-        ("id", "jorm_request_id", "method", "path", "upstream_path", "patched", "headers")
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ("id", "jorm_request_id", "method", "path", "upstream_path", "patched", "headers", "body", "patched_body")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     SQL
 
     INSERT_RESPONSE_SQL = <<~SQL.freeze
       INSERT INTO responses
-        ("id", "jorm_request_id", "status", "headers")
-      VALUES ($1, $2, $3, $4)
+        ("id", "jorm_request_id", "status", "headers", "body")
+      VALUES ($1, $2, $3, $4, $5)
     SQL
 
     def initialize(
@@ -52,7 +49,12 @@ module Jorm
       @enabled
     end
 
-    def record_request(req, _body_buffer, patched)
+    # +body_buffer+ is the (possibly patched) body Jorm::App is about to
+    # forward upstream; +req.body+ (memoized on the Request, unaffected
+    # by Downstream's patching) is the original body as received. Both
+    # are recorded, redacted, so patched and unpatched traffic can be
+    # diffed later -- they're identical strings when +patched+ is false.
+    def record_request(req, body_buffer, patched)
       return unless enabled?
 
       id = SecureRandom.uuid
@@ -61,16 +63,18 @@ module Jorm
       path = req.path_with_query_string
       upstream_path = Jorm::UpstreamClient.upstream_path(req)
       headers = JSON.generate(Redactor.redact_headers(req.headers))
+      body = Redactor.redact_body_text(req.body.to_s)
+      patched_body = Redactor.redact_body_text(body_buffer.to_s)
 
       @writer.enqueue do
         @connection.exec_params(
           INSERT_REQUEST_SQL,
-          [id, jorm_request_id, method, path, upstream_path, patched, headers]
+          [id, jorm_request_id, method, path, upstream_path, patched, headers, body, patched_body]
         )
       end
     end
 
-    def maybe_record_response(req, _chunks, upstream_result)
+    def maybe_record_response(req, chunks, upstream_result)
       return unless enabled?
 
       id = SecureRandom.uuid
@@ -81,11 +85,12 @@ module Jorm
         v.is_a?(Array) ? v.join(", ") : v.to_s
       end
       redacted_headers = JSON.generate(Redactor.redact_headers(headers))
+      body = Redactor.redact_body_text(chunks.join.dup.force_encoding("UTF-8").scrub)
 
       @writer.enqueue do
         @connection.exec_params(
           INSERT_RESPONSE_SQL,
-          [id, jorm_request_id, status, redacted_headers]
+          [id, jorm_request_id, status, redacted_headers, body]
         )
       end
     end

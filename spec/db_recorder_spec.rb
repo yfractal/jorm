@@ -28,12 +28,15 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#record_request" do
-    it "inserts a redacted row into requests, without recording the body" do
-      req = build_req("HTTP_AUTHORIZATION" => "Bearer sk-secret")
+    it "inserts a redacted row into requests, with both the original and patched body" do
+      req = build_req(
+        "HTTP_AUTHORIZATION" => "Bearer sk-secret",
+        "rack.input" => StringIO.new('{"key":"sk-abcdefghijk","thinking":true}')
+      )
 
       expect(connection).to receive(:exec_params) do |sql, params|
         expect(sql).to include("INSERT INTO requests")
-        id, jorm_request_id, method, path, upstream_path, patched, headers = params
+        id, jorm_request_id, method, path, upstream_path, patched, headers, body, patched_body = params
         expect(id).to match(/\A[0-9a-f-]{36}\z/)
         expect(id).not_to eq(req.jorm_request_id)
         expect(jorm_request_id).to eq(req.jorm_request_id)
@@ -42,6 +45,8 @@ RSpec.describe Jorm::DbRecorder do
         expect(upstream_path).to eq(Jorm::UpstreamClient.upstream_path(req))
         expect(patched).to eq(true)
         expect(headers).to include("***redacted***")
+        expect(body).to eq('{"key":"sk-***redacted***","thinking":true}')
+        expect(patched_body).to eq('{"key":"sk-***redacted***"}')
       end
 
       recorder.record_request(req, '{"key":"sk-abcdefghijk"}', true)
@@ -49,7 +54,7 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#maybe_record_response" do
-    it "inserts a single redacted row into responses, without recording the body" do
+    it "inserts a single redacted row into responses, with the joined body" do
       req = build_req
       upstream_result = Jorm::UpstreamClient::Result.new(
         status: 200,
@@ -62,14 +67,15 @@ RSpec.describe Jorm::DbRecorder do
         inserted << params
       end
 
-      recorder.maybe_record_response(req, ["chunk-one", "chunk-two"], upstream_result)
+      recorder.maybe_record_response(req, ["chunk-one ", "sk-abcdefghijk"], upstream_result)
 
       expect(inserted.size).to eq(1)
 
-      _id, jorm_request_id, status, headers = inserted[0]
+      _id, jorm_request_id, status, headers, body = inserted[0]
       expect(jorm_request_id).to eq(req.jorm_request_id)
       expect(status).to eq(200)
       expect(headers).to include("***redacted***")
+      expect(body).to eq("chunk-one sk-***redacted***")
     end
   end
 
