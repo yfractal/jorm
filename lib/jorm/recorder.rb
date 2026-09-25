@@ -13,7 +13,7 @@ module Jorm
   #
   # Every request/response record is appended to a single dump file as a
   # line of JSON (JSONL). The filename is normally supplied by bin/server
-  # (via DS_DUMP_FILE / +file_name+) so that all worker processes for a
+  # (via JO_DUMP_FILE / +file_name+) so that all worker processes for a
   # given server run -- e.g. Falcon's forked workers, which each load
   # config.ru and build their own Recorder -- share one file instead of
   # each creating its own. Writes are flock-protected so concurrent

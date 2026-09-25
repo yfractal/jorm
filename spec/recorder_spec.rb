@@ -48,7 +48,7 @@ RSpec.describe Jorm::Recorder do
       expect(Dir.children(dir)).to eq([shared_name])
     end
 
-    it "defaults file_name from Jorm::Config.record_file (DS_DUMP_FILE)" do
+    it "defaults file_name from Jorm::Config.record_file (JO_DUMP_FILE)" do
       allow(Jorm::Config).to receive(:record_file).and_return("dump-from-env.jsonl")
 
       recorder = described_class.new(enabled: true, dir: dir, record_response: false)

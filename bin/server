@@ -10,21 +10,21 @@ PORT="${PROXY_PORT:-8787}"
 echo "DeepSeek Auto Mode proxy: http://${HOST}:${PORT}"
 echo "Upstream: https://api.deepseek.com/anthropic"
 
-if [[ "${DS_DUMP:-}" == "true" || "${DS_DUMP:-}" == "1" ]]; then
-  DUMP_DIR="$(cd "${DS_DUMP_DIR:-./dumps}" 2>/dev/null && pwd || echo "${DS_DUMP_DIR:-./dumps}")"
+if [[ "${JO_DUMP:-}" == "true" || "${JO_DUMP:-}" == "1" ]]; then
+  DUMP_DIR="$(cd "${JO_DUMP_DIR:-./dumps}" 2>/dev/null && pwd || echo "${JO_DUMP_DIR:-./dumps}")"
 
   # Falcon runs multiple worker processes (forked/threaded) that each load
   # config.ru independently, so each would build its own Recorder. Fixing
-  # the dump filename here, before exec, and sharing it via DS_DUMP_FILE
+  # the dump filename here, before exec, and sharing it via JO_DUMP_FILE
   # means every worker appends to the same file instead of each creating
   # its own.
-  export DS_DUMP_FILE="dump-$(ruby -rtime -e 'print Time.now.utc.iso8601(3).tr(":", "-")').jsonl"
+  export JO_DUMP_FILE="dump-$(ruby -rtime -e 'print Time.now.utc.iso8601(3).tr(":", "-")').jsonl"
 
   resp=""
-  if [[ "${DS_DUMP_RESPONSE:-}" == "true" || "${DS_DUMP_RESPONSE:-}" == "1" ]]; then
+  if [[ "${JO_DUMP_RESPONSE:-}" == "true" || "${JO_DUMP_RESPONSE:-}" == "1" ]]; then
     resp=" (incl. response)"
   fi
-  echo "Dump: enabled → ${DUMP_DIR}/${DS_DUMP_FILE}${resp}"
+  echo "Dump: enabled → ${DUMP_DIR}/${JO_DUMP_FILE}${resp}"
 fi
 
 exec bundle exec falcon serve --bind "http://${HOST}:${PORT}" --config config.ru

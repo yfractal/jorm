@@ -12,11 +12,11 @@ module Jorm
     UPSTREAM_URL = ENV.fetch("UPSTREAM_URL")
 
     def record_enabled?
-      %w[true 1].include?(ENV["DS_DUMP"].to_s)
+      %w[true 1].include?(ENV["JO_DUMP"].to_s)
     end
 
     def record_dir
-      Pathname(ENV.fetch("DS_DUMP_DIR", "./dumps")).expand_path
+      Pathname(ENV.fetch("JO_DUMP_DIR", "./dumps")).expand_path
     end
 
     # Shared dump filename set once by bin/server (before it execs the
@@ -25,11 +25,11 @@ module Jorm
     # back to nil, in which case Recorder generates its own filename
     # (e.g. in tests, or when running config.ru directly).
     def record_file
-      ENV["DS_DUMP_FILE"]
+      ENV["JO_DUMP_FILE"]
     end
 
     def record_response?
-      %w[true 1].include?(ENV["DS_DUMP_RESPONSE"].to_s)
+      %w[true 1].include?(ENV["JO_DUMP_RESPONSE"].to_s)
     end
   end
 end
