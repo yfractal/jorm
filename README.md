@@ -22,9 +22,10 @@ bin/migrate
 ```
 
 `docker compose up -d` starts a standalone GreptimeDB instance (dashboard
-at `http://localhost:4000/dashboard`). `bin/migrate` applies
-`db/schema.sql` (idempotent -- safe to re-run) via GreptimeDB's
-PostgreSQL wire protocol (port 4003).
+at `http://localhost:4000/dashboard`). `bin/migrate` creates the
+`jorm` database if it doesn't exist, then applies `db/schema.sql`
+(idempotent -- safe to re-run) via GreptimeDB's PostgreSQL wire
+protocol (port 4003).
 
 If GreptimeDB isn't available, set `JO_DB_RECORD=0` to disable DB
 recording instead.
@@ -59,7 +60,7 @@ curl http://127.0.0.1:8787/health
 | `JO_DB_RECORD` | on | Set to `0`/`false` to disable recording to GreptimeDB |
 | `GREPTIMEDB_HOST` | `127.0.0.1` | GreptimeDB host |
 | `GREPTIMEDB_PORT` | `4003` | GreptimeDB PostgreSQL wire protocol port |
-| `GREPTIMEDB_DATABASE` | `public` | GreptimeDB database name |
+| `GREPTIMEDB_DATABASE` | `jorm` | GreptimeDB database name (created by `bin/migrate` if missing) |
 | `GREPTIMEDB_USER` | *(none)* | GreptimeDB user, if auth is configured |
 | `GREPTIMEDB_PASSWORD` | *(none)* | GreptimeDB password, if auth is configured |
 | `JO_DUMP` | off | Set to `1`/`true` to also record traffic to a local dump file |

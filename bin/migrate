@@ -1,7 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Applies db/schema.sql to GreptimeDB. Idempotent (CREATE TABLE IF NOT
+# Creates the GreptimeDB database (default: jorm) if needed, then applies
+# db/schema.sql. Idempotent (CREATE DATABASE / CREATE TABLE IF NOT
 # EXISTS), so it's safe to run every deploy. GreptimeDB can't ALTER a
 # TIME INDEX column once a table exists, so this isn't a full versioned
 # migration system -- for schema changes beyond adding new non-key
@@ -16,9 +17,23 @@ require "pg"
 # directly instead, so `bin/migrate` works standalone.
 host = ENV.fetch("GREPTIMEDB_HOST", "127.0.0.1")
 port = Integer(ENV.fetch("GREPTIMEDB_PORT", "4003"))
-dbname = ENV.fetch("GREPTIMEDB_DATABASE", "public")
+dbname = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
 user = ENV["GREPTIMEDB_USER"]
 password = ENV["GREPTIMEDB_PASSWORD"]
+
+# Bootstrap connection: GreptimeDB always has a "public" database, so we
+# connect there first to CREATE DATABASE, then reconnect to the target.
+bootstrap = PG.connect(host: host, port: port, dbname: "public", user: user, password: password)
+begin
+  puts "Ensuring database #{dbname.inspect} exists..."
+  # Identifiers can't be parameterized; dbname comes from our own env
+  # default / GREPTIMEDB_DATABASE, not from untrusted input.
+  raise ArgumentError, "invalid GREPTIMEDB_DATABASE: #{dbname.inspect}" unless dbname.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+
+  bootstrap.exec("CREATE DATABASE IF NOT EXISTS #{dbname}")
+ensure
+  bootstrap.close
+end
 
 root = Pathname(__dir__).join("..").expand_path
 schema_path = root.join("db", "schema.sql")

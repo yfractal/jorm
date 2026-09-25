@@ -45,7 +45,7 @@ module Jorm
     end
 
     def greptimedb_database
-      ENV.fetch("GREPTIMEDB_DATABASE", "public")
+      ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
     end
 
     def greptimedb_user
