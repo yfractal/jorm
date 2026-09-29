@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "async/http/client"
 require "async/http/endpoint"
 require "protocol/http/request"
@@ -17,6 +18,19 @@ module Jorm
       OpenSSL::SSL::SSLError,
       Async::TimeoutError
     ].freeze
+
+    # Raised when a retryable upstream failure still fails after the
+    # single retry. Carries the retry count so the App can record a 502
+    # response row instead of letting Falcon surface a bare 500.
+    class UpstreamError < StandardError
+      attr_reader :retries, :cause_error
+
+      def initialize(message, retries:, cause:)
+        super(message)
+        @retries = retries
+        @cause_error = cause
+      end
+    end
 
     # Wraps an Async::HTTP response body so the client is closed once
     # Falcon finishes streaming the response to the downstream client.
@@ -51,7 +65,7 @@ module Jorm
       end
     end
 
-    Result = Struct.new(:status, :headers, :body, keyword_init: true)
+    Result = Struct.new(:status, :headers, :body, :retries, :error, keyword_init: true)
 
     def self.upstream_path(req)
       req.path_with_query_string || '/'
@@ -69,7 +83,7 @@ module Jorm
     end
 
     def call(req:, path:, body:)
-      retried = false
+      retries = 0
       headers = HeaderFilter.copy_request_headers(req.headers)
 
       begin
@@ -81,17 +95,19 @@ module Jorm
         Result.new(
           status: response.status,
           headers: response.headers.to_h,
-          body: BoundBody.new(response.body, client)
+          body: BoundBody.new(response.body, client),
+          retries: retries,
+          error: nil
         )
       rescue *RETRYABLE => e
         client&.close
-        unless retried
-          retried = true
+        if retries.zero?
+          retries = 1
           warn "Upstream error: [#{error_code(e)}] #{e.message}"
           puts "  \u21B3 retrying..."
           retry
         end
-        raise
+        raise UpstreamError.new(e.message, retries: retries, cause: e)
       rescue StandardError => e
         client&.close
         warn "Upstream error: [#{e.class}] #{e.message}\n#{e.backtrace&.first(10)&.join("\n")}"
@@ -99,7 +115,9 @@ module Jorm
         Result.new(
           status: 502,
           headers: { "content-type" => "application/json; charset=utf-8" },
-          body: [JSON.generate({ "error" => "upstream_error", "message" => e.message })]
+          body: [JSON.generate({ "error" => "upstream_error", "message" => e.message })],
+          retries: retries,
+          error: e.message
         )
       end
     end

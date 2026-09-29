@@ -36,7 +36,20 @@ RSpec.describe Jorm::CompositeRecorder do
 
       expect { composite.maybe_record_response(:req, ["chunk"], :result) }.not_to raise_error
 
-      expect(good).to have_received(:maybe_record_response).with(:req, ["chunk"], :result)
+      expect(good).to have_received(:maybe_record_response).with(:req, ["chunk"], :result, timing: nil)
+    end
+
+    it "forwards the timing keyword to every recorder" do
+      allow(bad).to receive(:maybe_record_response)
+      allow(good).to receive(:maybe_record_response)
+      timing = { started_at: 1.0, chunk_times: [1.1], finished_at: 1.2 }
+
+      composite.maybe_record_response(:req, ["chunk"], :result, timing: timing)
+
+      expect(good).to have_received(:maybe_record_response)
+        .with(:req, ["chunk"], :result, timing: timing)
+      expect(bad).to have_received(:maybe_record_response)
+        .with(:req, ["chunk"], :result, timing: timing)
     end
   end
 end

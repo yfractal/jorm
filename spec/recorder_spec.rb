@@ -126,7 +126,8 @@ RSpec.describe Jorm::Recorder do
         headers: {
           "content-type" => "application/json",
           "authorization" => "Bearer sk-secret"
-        }
+        },
+        retries: 0
       )
 
       recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result)
@@ -136,6 +137,29 @@ RSpec.describe Jorm::Recorder do
       expect(record["response"]["status"]).to eq(200)
       expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")
       expect(record["response"]["body"]).to eq({ "token" => "sk-***redacted***" })
+      expect(record["response"]["retries"]).to eq(0)
+    end
+
+    it "persists timing, retries and error when provided" do
+      req = build_req
+      upstream_result = Jorm::UpstreamClient::Result.new(
+        status: 502,
+        headers: { "content-type" => "application/json" },
+        retries: 1,
+        error: "timeout"
+      )
+      timing = { started_at: 1.0, chunk_times: [1.05], finished_at: 1.2 }
+
+      recorder.maybe_record_response(req, ['{"error":"timeout"}'], upstream_result, timing: timing)
+
+      record = written_records("res").first
+      expect(record["response"]["retries"]).to eq(1)
+      expect(record["response"]["error"]).to eq("timeout")
+      expect(record["response"]["timing"]).to eq(
+        "startedAt" => 1.0,
+        "chunkTimes" => [1.05],
+        "finishedAt" => 1.2
+      )
     end
   end
 

@@ -83,8 +83,9 @@ module Jorm
     # body has been fully read. Builds a new record for the "response"
     # side from +upstream_result+ (status/headers) and the collected
     # +chunks+ (body), tagged with +req+'s jorm_request_id, then writes
-    # it out.
-    def maybe_record_response(req, chunks, upstream_result)
+    # it out. Optional +timing+ (started_at / chunk_times / finished_at)
+    # is persisted alongside retries/error for debugging.
+    def maybe_record_response(req, chunks, upstream_result, timing: nil)
       return unless enabled?
 
       record = {
@@ -98,11 +99,21 @@ module Jorm
         end
         resp_buf = chunks.join
 
-        record["response"] = {
+        response = {
           "status" => upstream_result.status,
           "headers" => redact_headers(headers),
-          "body" => resp_buf.empty? ? nil : parse_body(resp_buf, headers["content-type"])
+          "body" => resp_buf.empty? ? nil : parse_body(resp_buf, headers["content-type"]),
+          "retries" => upstream_result.retries.to_i
         }
+        response["error"] = upstream_result.error if upstream_result.error
+        if timing
+          response["timing"] = {
+            "startedAt" => timing[:started_at],
+            "chunkTimes" => timing[:chunk_times],
+            "finishedAt" => timing[:finished_at]
+          }
+        end
+        record["response"] = response
       rescue StandardError
         # still write what we have
       end

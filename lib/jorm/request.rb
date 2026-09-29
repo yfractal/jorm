@@ -6,8 +6,12 @@ module Jorm
   # Thin wrapper around a Rack env hash exposing the bits of the
   # incoming request the proxy cares about, with memoized access.
   class Request
+    attr_reader :started_at
+
     def initialize(env)
       @env = env
+      # Monotonic clock so duration / TTFT aren't skewed by wall-clock jumps.
+      @started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
 
     def method

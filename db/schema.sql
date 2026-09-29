@@ -48,5 +48,9 @@ CREATE TABLE IF NOT EXISTS responses (
   "status" INT16,
   "headers" JSON,              -- redacted response headers
   "body" STRING,               -- redacted response body (all chunks joined)
+  "ttft_ms" FLOAT64,           -- ms from request start to first content_block_delta (or total for non-stream)
+  "duration_ms" FLOAT64,       -- ms from request start to response complete
+  "retry_count" INT16,         -- upstream retries performed before this response
+  "error" STRING,              -- transport / HTTP / mid-stream error message, if any
   PRIMARY KEY ("id")
 );
