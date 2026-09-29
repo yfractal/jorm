@@ -945,11 +945,15 @@ PAGE_CSS = <<~CSS
   .chart-wrap:last-child { margin-bottom: 0.5rem; }
   .chart-wrap canvas { width: 100% !important; height: 100% !important; }
   .chart-title {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: #555;
-    margin: 0 0 0.35rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: inherit;
+    letter-spacing: 0.01em;
+    margin: 0.75rem 0 0.5rem;
+    padding-left: 0.55rem;
+    border-left: 3px solid #2563eb;
   }
+  .chart-title:first-child { margin-top: 0; }
 
   .chart { display: block; color: inherit; }
   .chart-label { font-size: 10px; fill: currentColor; opacity: 0.65; font-family: ui-sans-serif, system-ui, sans-serif; }
