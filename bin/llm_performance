@@ -1,0 +1,1148 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Serves an HTML report of LLM proxy performance: traffic, latency, TTFT,
+# tokens/sec, token breakdown (input / output / cached / reasoning),
+# errors and retries.
+#
+# Reads from GreptimeDB's HTTP SQL API (default :4000) -- no `pg` gem
+# needed, only Ruby stdlib + WEBrick.
+#
+# Timing / retry columns (ttft_ms, duration_ms, retry_count, error) are
+# written by the proxy starting with the capture change; older rows leave
+# those as NULL and are excluded from latency stats. Token counts and
+# model come from the reassembled response body.
+#
+# Usage:
+#   bin/llm_performance
+#   JO_REPORT_PORT=4891 bin/llm_performance
+# Then open http://127.0.0.1:4891/
+
+require "cgi"
+require "json"
+require "net/http"
+require "time"
+require "uri"
+require "webrick"
+
+REPORT_HOST = ENV.fetch("JO_REPORT_HOST", "127.0.0.1")
+REPORT_PORT = Integer(ENV.fetch("JO_REPORT_PORT", "4891"))
+GREPTIME_HOST = ENV.fetch("GREPTIMEDB_HTTP_HOST", "127.0.0.1")
+GREPTIME_PORT = Integer(ENV.fetch("GREPTIMEDB_HTTP_PORT", "4000"))
+GREPTIME_DB = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
+
+RANGE_PRESETS = {
+  "1h" => 3600,
+  "6h" => 6 * 3600,
+  "24h" => 24 * 3600,
+  "7d" => 7 * 24 * 3600
+}.freeze
+
+DEFAULT_RANGE = "24h"
+MAX_RECENT_ERRORS = 25
+CHART_WIDTH = 720
+CHART_HEIGHT = 180
+
+# ---------------------------------------------------------------------------
+# GreptimeDB HTTP SQL client
+# ---------------------------------------------------------------------------
+
+def sql_query(sql)
+  uri = URI("http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql")
+  uri.query = URI.encode_www_form(db: GREPTIME_DB, sql: sql)
+
+  response = Net::HTTP.get_response(uri)
+  raise "GreptimeDB HTTP #{response.code}: #{response.body[0, 500]}" unless response.is_a?(Net::HTTPSuccess)
+
+  data = JSON.parse(response.body)
+  records = data.dig("output", 0, "records")
+  return [] unless records
+
+  columns = records.dig("schema", "column_schemas")&.map { |c| c["name"] } || []
+  (records["rows"] || []).map { |row| columns.zip(row).to_h }
+end
+
+def sql_literal(value)
+  "'#{value.to_s.gsub("'", "''")}'"
+end
+
+def parse_time_param(raw)
+  return nil if raw.nil? || raw.strip.empty?
+
+  Time.parse(raw)
+rescue ArgumentError
+  nil
+end
+
+def parse_json_maybe(value)
+  case value
+  when Hash, Array then value
+  when String
+    return nil if value.empty?
+
+    JSON.parse(value)
+  end
+rescue JSON::ParserError
+  nil
+end
+
+def to_time(value)
+  case value
+  when nil then nil
+  when Time then value.utc
+  when Integer then Time.at(value > 1_000_000_000_000 ? value / 1000.0 : value).utc
+  else
+    Time.parse(value.to_s).utc
+  end
+rescue ArgumentError
+  nil
+end
+
+def to_f_or_nil(value)
+  return nil if value.nil? || value.to_s.empty?
+
+  Float(value)
+rescue ArgumentError, TypeError
+  nil
+end
+
+def to_i_or_zero(value)
+  Integer(value || 0)
+rescue ArgumentError, TypeError
+  0
+end
+
+# ---------------------------------------------------------------------------
+# Fetch / normalize rows
+# ---------------------------------------------------------------------------
+
+def resolve_range(preset:, from_raw:, to_raw:)
+  from_time = parse_time_param(from_raw)
+  to_time = parse_time_param(to_raw)
+  return [from_time, to_time, nil] if from_time || to_time
+
+  seconds = RANGE_PRESETS[preset] || RANGE_PRESETS[DEFAULT_RANGE]
+  [Time.now.utc - seconds, Time.now.utc, preset]
+end
+
+def fetch_rows(from_time:, to_time:)
+  clauses = ["1 = 1"]
+  clauses << "created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
+  clauses << "created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+
+  sql = <<~SQL
+    SELECT created_at, status, ttft_ms, duration_ms, retry_count, error, body
+    FROM responses
+    WHERE #{clauses.join(" AND ")}
+    ORDER BY created_at ASC
+  SQL
+
+  sql_query(sql)
+end
+
+def normalize_row(row)
+  body = parse_json_maybe(row["body"])
+  usage = body.is_a?(Hash) ? body["usage"] : nil
+  usage = {} unless usage.is_a?(Hash)
+
+  input = to_i_or_zero(usage["input_tokens"])
+  output = to_i_or_zero(usage["output_tokens"])
+  cache_read = to_i_or_zero(usage["cache_read_input_tokens"])
+  cache_creation = to_i_or_zero(usage["cache_creation_input_tokens"])
+  details = usage["output_tokens_details"]
+  reasoning = details.is_a?(Hash) ? to_i_or_zero(details["thinking_tokens"]) : 0
+
+  status = to_i_or_zero(row["status"])
+  error = row["error"]
+  error = nil if error.respond_to?(:empty?) && error.empty?
+  is_error = !error.nil? || status >= 400
+
+  ttft_ms = to_f_or_nil(row["ttft_ms"])
+  duration_ms = to_f_or_nil(row["duration_ms"])
+  tokens_per_sec = compute_tokens_per_sec(output, duration_ms, ttft_ms)
+
+  {
+    "created_at" => to_time(row["created_at"]),
+    "status" => status,
+    "ttft_ms" => ttft_ms,
+    "duration_ms" => duration_ms,
+    "retry_count" => to_i_or_zero(row["retry_count"]),
+    "error" => error,
+    "is_error" => is_error,
+    "model" => body.is_a?(Hash) ? body["model"].to_s : "",
+    "input_tokens" => input,
+    "output_tokens" => output,
+    "cache_read_tokens" => cache_read,
+    "cache_creation_tokens" => cache_creation,
+    "reasoning_tokens" => reasoning,
+    "tokens_per_sec" => tokens_per_sec
+  }
+end
+
+def compute_tokens_per_sec(output_tokens, duration_ms, ttft_ms)
+  return nil if output_tokens <= 0 || duration_ms.nil? || duration_ms <= 0
+
+  gen_ms = if ttft_ms && ttft_ms > 0 && duration_ms > ttft_ms
+             duration_ms - ttft_ms
+           else
+             duration_ms
+           end
+  return nil if gen_ms <= 0
+
+  (output_tokens / (gen_ms / 1000.0)).round(2)
+end
+
+# ---------------------------------------------------------------------------
+# Aggregation
+# ---------------------------------------------------------------------------
+
+def percentile(values, p)
+  return nil if values.nil? || values.empty?
+
+  sorted = values.sort
+  return sorted.first if sorted.length == 1
+
+  rank = (p / 100.0) * (sorted.length - 1)
+  low = rank.floor
+  high = rank.ceil
+  return sorted[low] if low == high
+
+  sorted[low] + (sorted[high] - sorted[low]) * (rank - low)
+end
+
+def choose_bucket_seconds(from_time, to_time)
+  span = [(to_time || Time.now.utc) - (from_time || (Time.now.utc - 3600)), 60].max
+  case span
+  when 0...3 * 3600 then 60
+  when 3 * 3600...24 * 3600 then 5 * 60
+  when 24 * 3600...3 * 24 * 3600 then 30 * 60
+  else 3600
+  end
+end
+
+def bucket_key(time, bucket_seconds)
+  return nil unless time
+
+  epoch = time.to_i
+  Time.at(epoch - (epoch % bucket_seconds)).utc
+end
+
+def build_buckets(rows, from_time, to_time)
+  bucket_seconds = choose_bucket_seconds(from_time, to_time)
+  buckets = Hash.new do |h, k|
+    h[k] = {
+      "t" => k,
+      "requests" => 0,
+      "errors" => 0,
+      "retries" => 0,
+      "ttft" => [],
+      "duration" => [],
+      "tokens_per_sec" => [],
+      "input_tokens" => 0,
+      "output_tokens" => 0,
+      "cache_read_tokens" => 0,
+      "cache_creation_tokens" => 0,
+      "reasoning_tokens" => 0
+    }
+  end
+
+  rows.each do |row|
+    key = bucket_key(row["created_at"], bucket_seconds)
+    next unless key
+
+    b = buckets[key]
+    b["requests"] += 1
+    b["errors"] += 1 if row["is_error"]
+    b["retries"] += row["retry_count"]
+    b["ttft"] << row["ttft_ms"] if row["ttft_ms"]
+    b["duration"] << row["duration_ms"] if row["duration_ms"]
+    b["tokens_per_sec"] << row["tokens_per_sec"] if row["tokens_per_sec"]
+    b["input_tokens"] += row["input_tokens"]
+    b["output_tokens"] += row["output_tokens"]
+    b["cache_read_tokens"] += row["cache_read_tokens"]
+    b["cache_creation_tokens"] += row["cache_creation_tokens"]
+    b["reasoning_tokens"] += row["reasoning_tokens"]
+  end
+
+  # Fill empty buckets across the range so the chart has a continuous x-axis.
+  if from_time && to_time
+    t = bucket_key(from_time, bucket_seconds)
+    end_t = bucket_key(to_time, bucket_seconds)
+    while t && end_t && t <= end_t
+      buckets[t]
+      t += bucket_seconds
+    end
+  end
+
+  {
+    "bucket_seconds" => bucket_seconds,
+    "buckets" => buckets.keys.sort.map { |k| buckets[k] }
+  }
+end
+
+def build_summary(rows)
+  ttfts = rows.filter_map { |r| r["ttft_ms"] }
+  durations = rows.filter_map { |r| r["duration_ms"] }
+  tps = rows.filter_map { |r| r["tokens_per_sec"] }
+  errors = rows.count { |r| r["is_error"] }
+  retries = rows.sum { |r| r["retry_count"] }
+
+  {
+    "requests" => rows.size,
+    "errors" => errors,
+    "error_rate" => rows.empty? ? 0.0 : (100.0 * errors / rows.size),
+    "retries" => retries,
+    "ttft_p50" => percentile(ttfts, 50),
+    "ttft_p95" => percentile(ttfts, 95),
+    "duration_p50" => percentile(durations, 50),
+    "duration_p95" => percentile(durations, 95),
+    "tokens_per_sec_avg" => tps.empty? ? nil : (tps.sum / tps.size.to_f),
+    "input_tokens" => rows.sum { |r| r["input_tokens"] },
+    "output_tokens" => rows.sum { |r| r["output_tokens"] },
+    "cache_read_tokens" => rows.sum { |r| r["cache_read_tokens"] },
+    "cache_creation_tokens" => rows.sum { |r| r["cache_creation_tokens"] },
+    "reasoning_tokens" => rows.sum { |r| r["reasoning_tokens"] }
+  }
+end
+
+def build_per_model(rows)
+  by_model = Hash.new { |h, k| h[k] = [] }
+  rows.each do |row|
+    model = row["model"].to_s
+    model = "(unknown)" if model.empty?
+    by_model[model] << row
+  end
+
+  by_model.map do |model, model_rows|
+    ttfts = model_rows.filter_map { |r| r["ttft_ms"] }
+    durations = model_rows.filter_map { |r| r["duration_ms"] }
+    tps = model_rows.filter_map { |r| r["tokens_per_sec"] }
+    errors = model_rows.count { |r| r["is_error"] }
+    {
+      "model" => model,
+      "requests" => model_rows.size,
+      "ttft_p50" => percentile(ttfts, 50),
+      "duration_p50" => percentile(durations, 50),
+      "tokens_per_sec_avg" => tps.empty? ? nil : (tps.sum / tps.size.to_f),
+      "error_rate" => model_rows.empty? ? 0.0 : (100.0 * errors / model_rows.size),
+      "input_tokens" => model_rows.sum { |r| r["input_tokens"] },
+      "output_tokens" => model_rows.sum { |r| r["output_tokens"] },
+      "cache_read_tokens" => model_rows.sum { |r| r["cache_read_tokens"] },
+      "reasoning_tokens" => model_rows.sum { |r| r["reasoning_tokens"] }
+    }
+  end.sort_by { |m| -m["requests"] }
+end
+
+def build_error_breakdown(rows)
+  counts = Hash.new(0)
+  rows.each do |row|
+    next unless row["is_error"]
+
+    key = row["error"].to_s
+    key = "http_#{row["status"]}" if key.empty?
+    counts[key] += 1
+  end
+  counts.sort_by { |_, n| -n }.map { |msg, n| { "error" => msg, "count" => n } }
+end
+
+def recent_failures(rows)
+  rows
+    .select { |r| r["is_error"] || r["retry_count"].positive? }
+    .sort_by { |r| r["created_at"] || Time.at(0) }
+    .reverse
+    .first(MAX_RECENT_ERRORS)
+end
+
+def available_models(rows)
+  rows.map { |r| r["model"] }.reject(&:empty?).uniq.sort
+end
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
+
+def h(text)
+  CGI.escapeHTML(text.to_s)
+end
+
+def format_ms(ms)
+  return "n/a" if ms.nil?
+
+  if ms >= 1000
+    format("%.2fs", ms / 1000.0)
+  else
+    format("%.0fms", ms)
+  end
+end
+
+def format_rate(rate)
+  format("%.1f%%", rate)
+end
+
+def format_tps(tps)
+  return "n/a" if tps.nil?
+
+  format("%.1f", tps)
+end
+
+def format_int(n)
+  n.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
+end
+
+def format_ts(time)
+  return "—" unless time
+
+  time.utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+end
+
+def format_bucket_label(time, bucket_seconds)
+  return "" unless time
+
+  if bucket_seconds < 3600
+    time.strftime("%H:%M")
+  elsif bucket_seconds < 24 * 3600
+    time.strftime("%m-%d %H:%M")
+  else
+    time.strftime("%m-%d")
+  end
+end
+
+def datetime_local_value(time)
+  return nil unless time
+
+  time.getlocal.strftime("%Y-%m-%dT%H:%M")
+end
+
+def query_string(params)
+  pairs = params.compact.filter_map do |k, v|
+    next if v.nil? || v.to_s.empty?
+
+    "#{CGI.escape(k.to_s)}=#{CGI.escape(v.to_s)}"
+  end
+  pairs.empty? ? "" : "?#{pairs.join("&")}"
+end
+
+# ---------------------------------------------------------------------------
+# SVG charts
+# ---------------------------------------------------------------------------
+
+def svg_bar_chart(buckets, value_key:, error_key: nil, height: CHART_HEIGHT, width: CHART_WIDTH)
+  return empty_chart_svg("No data") if buckets.empty?
+
+  values = buckets.map { |b| b[value_key].to_f }
+  errors = error_key ? buckets.map { |b| b[error_key].to_f } : Array.new(buckets.size, 0.0)
+  max_v = [values.max || 0, 1].max
+  pad_l = 36
+  pad_r = 12
+  pad_t = 12
+  pad_b = 28
+  plot_w = width - pad_l - pad_r
+  plot_h = height - pad_t - pad_b
+  gap = 2.0
+  bar_w = [(plot_w.to_f / buckets.size) - gap, 1].max
+
+  bars = buckets.each_with_index.map do |b, i|
+    x = pad_l + i * (bar_w + gap)
+    ok = [values[i] - errors[i], 0].max
+    err = errors[i]
+    ok_h = plot_h * (ok / max_v)
+    err_h = plot_h * (err / max_v)
+    y_ok = pad_t + plot_h - ok_h - err_h
+    y_err = pad_t + plot_h - err_h
+    parts = []
+    if ok_h > 0
+      parts << %(<rect x="#{x.round(1)}" y="#{y_ok.round(1)}" width="#{bar_w.round(1)}" height="#{ok_h.round(1)}" fill="#2563eb" rx="1"/>)
+    end
+    if err_h > 0
+      parts << %(<rect x="#{x.round(1)}" y="#{y_err.round(1)}" width="#{bar_w.round(1)}" height="#{err_h.round(1)}" fill="#dc2626" rx="1"/>)
+    end
+    parts.join
+  end.join
+
+  labels = axis_labels(buckets, pad_l, bar_w + gap, pad_t + plot_h + 14)
+  y_labels = [
+    %(<text x="#{pad_l - 6}" y="#{pad_t + 4}" text-anchor="end" class="chart-label">#{max_v.round}</text>),
+    %(<text x="#{pad_l - 6}" y="#{pad_t + plot_h}" text-anchor="end" class="chart-label">0</text>)
+  ].join
+
+  <<~SVG
+    <svg viewBox="0 0 #{width} #{height}" width="100%" role="img" aria-label="Traffic chart" class="chart">
+      <line x1="#{pad_l}" y1="#{pad_t}" x2="#{pad_l}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      <line x1="#{pad_l}" y1="#{pad_t + plot_h}" x2="#{width - pad_r}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      #{y_labels}
+      #{bars}
+      #{labels}
+    </svg>
+  SVG
+end
+
+def svg_line_chart(buckets, series:, height: CHART_HEIGHT, width: CHART_WIDTH)
+  # series: [{key:, label:, color:, aggregator: ->(b){...}}]
+  return empty_chart_svg("No timing data") if buckets.empty?
+
+  all_values = series.flat_map { |s| buckets.filter_map { |b| s[:aggregator].call(b) } }
+  return empty_chart_svg("No timing data") if all_values.empty?
+
+  max_v = [all_values.max, 1].max
+  pad_l = 48
+  pad_r = 12
+  pad_t = 12
+  pad_b = 28
+  plot_w = width - pad_l - pad_r
+  plot_h = height - pad_t - pad_b
+  step = buckets.size <= 1 ? 0 : plot_w.to_f / (buckets.size - 1)
+
+  paths = series.map do |s|
+    points = buckets.each_with_index.filter_map do |b, i|
+      v = s[:aggregator].call(b)
+      next unless v
+
+      x = pad_l + i * step
+      y = pad_t + plot_h - (plot_h * (v / max_v))
+      [x, y]
+    end
+    next if points.empty?
+
+    d = points.each_with_index.map { |(x, y), i| "#{i.zero? ? "M" : "L"}#{x.round(1)},#{y.round(1)}" }.join(" ")
+    %(<path d="#{d}" fill="none" stroke="#{s[:color]}" stroke-width="2"/>)
+  end.compact.join
+
+  legend = series.each_with_index.map do |s, i|
+    x = pad_l + i * 140
+    %(<rect x="#{x}" y="4" width="10" height="10" fill="#{s[:color]}" rx="1"/><text x="#{x + 14}" y="13" class="chart-label">#{h(s[:label])}</text>)
+  end.join
+
+  labels = axis_labels(buckets, pad_l, step.zero? ? plot_w : step, pad_t + plot_h + 14)
+  y_labels = [
+    %(<text x="#{pad_l - 6}" y="#{pad_t + 4}" text-anchor="end" class="chart-label">#{format_ms(max_v)}</text>),
+    %(<text x="#{pad_l - 6}" y="#{pad_t + plot_h}" text-anchor="end" class="chart-label">0</text>)
+  ].join
+
+  <<~SVG
+    <svg viewBox="0 0 #{width} #{height}" width="100%" role="img" aria-label="Latency chart" class="chart">
+      <line x1="#{pad_l}" y1="#{pad_t}" x2="#{pad_l}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      <line x1="#{pad_l}" y1="#{pad_t + plot_h}" x2="#{width - pad_r}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      #{y_labels}
+      #{paths}
+      #{labels}
+      #{legend}
+    </svg>
+  SVG
+end
+
+def svg_stacked_token_chart(buckets, height: CHART_HEIGHT, width: CHART_WIDTH)
+  return empty_chart_svg("No token data") if buckets.empty?
+
+  layers = [
+    { key: "input_tokens", color: "#2563eb", label: "input" },
+    { key: "output_tokens", color: "#16a34a", label: "output" },
+    { key: "cache_read_tokens", color: "#ca8a04", label: "cached" },
+    { key: "reasoning_tokens", color: "#9333ea", label: "reasoning" }
+  ]
+  totals = buckets.map { |b| layers.sum { |l| b[l[:key]].to_f } }
+  max_v = [totals.max || 0, 1].max
+
+  pad_l = 48
+  pad_r = 12
+  pad_t = 20
+  pad_b = 28
+  plot_w = width - pad_l - pad_r
+  plot_h = height - pad_t - pad_b
+  gap = 2.0
+  bar_w = [(plot_w.to_f / buckets.size) - gap, 1].max
+
+  bars = buckets.each_with_index.map do |b, i|
+    x = pad_l + i * (bar_w + gap)
+    y = pad_t + plot_h
+    layers.map do |layer|
+      v = b[layer[:key]].to_f
+      next if v <= 0
+
+      hgt = plot_h * (v / max_v)
+      y -= hgt
+      %(<rect x="#{x.round(1)}" y="#{y.round(1)}" width="#{bar_w.round(1)}" height="#{hgt.round(1)}" fill="#{layer[:color]}"/>)
+    end.compact.join
+  end.join
+
+  legend = layers.each_with_index.map do |l, i|
+    x = pad_l + i * 110
+    %(<rect x="#{x}" y="4" width="10" height="10" fill="#{l[:color]}" rx="1"/><text x="#{x + 14}" y="13" class="chart-label">#{l[:label]}</text>)
+  end.join
+
+  labels = axis_labels(buckets, pad_l, bar_w + gap, pad_t + plot_h + 14)
+
+  <<~SVG
+    <svg viewBox="0 0 #{width} #{height}" width="100%" role="img" aria-label="Token chart" class="chart">
+      <line x1="#{pad_l}" y1="#{pad_t}" x2="#{pad_l}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      <line x1="#{pad_l}" y1="#{pad_t + plot_h}" x2="#{width - pad_r}" y2="#{pad_t + plot_h}" stroke="currentColor" stroke-opacity="0.2"/>
+      #{bars}
+      #{labels}
+      #{legend}
+    </svg>
+  SVG
+end
+
+def axis_labels(buckets, pad_l, step, y)
+  return "" if buckets.empty?
+
+  count = [buckets.size, 6].min
+  indexes = if buckets.size == 1
+              [0]
+            else
+              (0...count).map { |i| (i * (buckets.size - 1).to_f / (count - 1)).round }.uniq
+            end
+  indexes.map do |i|
+    x = pad_l + i * step
+    label = format_bucket_label(buckets[i]["t"], 1)
+    %(<text x="#{x.round(1)}" y="#{y}" text-anchor="middle" class="chart-label">#{h(label)}</text>)
+  end.join
+end
+
+def empty_chart_svg(message)
+  <<~SVG
+    <svg viewBox="0 0 #{CHART_WIDTH} #{CHART_HEIGHT}" width="100%" class="chart chart-empty" role="img">
+      <text x="50%" y="50%" text-anchor="middle" class="chart-label">#{h(message)}</text>
+    </svg>
+  SVG
+end
+
+# ---------------------------------------------------------------------------
+# HTML
+# ---------------------------------------------------------------------------
+
+PAGE_CSS = <<~CSS
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0 auto;
+    max-width: 1120px;
+    padding: 2rem 1.25rem 3rem;
+    line-height: 1.45;
+    color: #1a1a1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6e6e6; }
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    background: rgba(127, 127, 127, 0.15);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+  }
+
+  .page-header { margin-bottom: 1.5rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.35rem; }
+  h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .subtitle { color: #666; font-size: 0.9rem; margin: 0; max-width: 60em; }
+
+  .stats { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .stat {
+    flex: 1 1 120px;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .stat-primary { border-color: #2563eb; background: rgba(37, 99, 235, 0.06); }
+  .stat-warn { border-color: #dc2626; background: rgba(220, 38, 38, 0.06); }
+  .stat-value { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 0.72rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  form.filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: end;
+    margin-bottom: 1.75rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.3rem; }
+  .field label { font-size: 0.78rem; font-weight: 600; color: #555; }
+  .field input, .field select {
+    padding: 0.45rem 0.55rem;
+    font: inherit;
+    font-size: 0.9rem;
+    border: 1px solid rgba(127, 127, 127, 0.4);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+  }
+  .field input:focus, .field select:focus { outline: 2px solid #2563eb; outline-offset: 1px; }
+  .field-actions { flex-direction: row; gap: 0.5rem; }
+  .presets { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .presets a {
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    text-decoration: none;
+    color: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .presets a:hover { background: rgba(127, 127, 127, 0.12); }
+  .presets a.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1;
+  }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-ghost {
+    background: transparent;
+    border-color: rgba(127, 127, 127, 0.4);
+    color: inherit;
+  }
+  .btn-ghost:hover { background: rgba(127, 127, 127, 0.12); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+    padding: 1rem 1.1rem 0.75rem;
+  }
+  .panel-full { grid-column: 1 / -1; }
+  .panel-hint { color: #666; font-size: 0.8rem; margin: -0.4rem 0 0.75rem; }
+
+  .chart { display: block; color: inherit; }
+  .chart-label { font-size: 10px; fill: currentColor; opacity: 0.65; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .legend-row { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.8rem; color: #666; margin-top: 0.35rem; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.3rem; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { padding: 0.55rem 0.6rem; text-align: left; vertical-align: top; }
+  thead th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #666;
+    border-bottom: 2px solid rgba(127, 127, 127, 0.3);
+  }
+  tbody tr td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); }
+  tbody tr:hover td { background: rgba(127, 127, 127, 0.06); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .muted { color: #999; }
+  .error-text { color: #dc2626; }
+
+  .token-pills { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.75rem; }
+  .pill {
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+  }
+  .pill strong { font-variant-numeric: tabular-nums; margin-right: 0.25rem; }
+
+  .state-panel {
+    text-align: center;
+    padding: 3rem 1.5rem;
+    border: 1px dashed rgba(127, 127, 127, 0.35);
+    border-radius: 8px;
+  }
+  .state-panel-error { border-color: #dc2626; background: rgba(220, 38, 38, 0.06); }
+  .state-title { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.4rem; }
+  .state-hint { color: #666; font-size: 0.88rem; margin: 0 0 1rem; }
+CSS
+
+def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failures:,
+                range_preset:, from_raw:, to_raw:, from_time:, to_time:, model_filter:,
+                available_models:, error: nil)
+  filters_active = !model_filter.to_s.empty? || !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
+                   (range_preset && range_preset != DEFAULT_RANGE)
+
+  body_html =
+    if error
+      render_error_state(error)
+    elsif rows.empty?
+      render_empty_state(filters_active: filters_active)
+    else
+      render_dashboard(
+        summary: summary,
+        buckets_info: buckets_info,
+        models: models,
+        error_breakdown: error_breakdown,
+        failures: failures
+      )
+    end
+
+  preset_links = RANGE_PRESETS.keys.map do |key|
+    cls = (range_preset == key && from_raw.to_s.empty? && to_raw.to_s.empty?) ? "active" : ""
+    %(<a class="#{cls}" href="/#{h(query_string(range: key, model: model_filter))}">#{key}</a>)
+  end.join
+
+  model_options = [%(<option value="">All models</option>)] +
+                  available_models.map do |m|
+                    selected = m == model_filter ? " selected" : ""
+                    %(<option value="#{h(m)}"#{selected}>#{h(m)}</option>)
+                  end
+
+  <<~HTML
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>LLM performance — jorm</title>
+      <style>#{PAGE_CSS}</style>
+    </head>
+    <body>
+      <header class="page-header">
+        <h1>LLM performance</h1>
+        <p class="subtitle">
+          Traffic, latency, TTFT, tokens/sec and token breakdown from proxied responses.
+          Timing columns require a recent proxy; older rows still contribute token and error stats.
+        </p>
+      </header>
+
+      <form class="filter" method="get" action="/">
+        <div class="field">
+          <label>Range</label>
+          <div class="presets">#{preset_links}</div>
+        </div>
+        <div class="field">
+          <label for="from">From</label>
+          <input id="from" type="datetime-local" name="from" value="#{h(datetime_local_value(from_time) || from_raw.to_s)}">
+        </div>
+        <div class="field">
+          <label for="to">To</label>
+          <input id="to" type="datetime-local" name="to" value="#{h(datetime_local_value(to_time) || to_raw.to_s)}">
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <select id="model" name="model">#{model_options.join}</select>
+        </div>
+        <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
+        <div class="field field-actions">
+          <button type="submit" class="btn btn-primary">Apply</button>
+          #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
+        </div>
+      </form>
+
+      <main>
+        #{body_html}
+      </main>
+    </body>
+    </html>
+  HTML
+end
+
+def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failures:)
+  buckets = buckets_info["buckets"]
+
+  traffic_svg = svg_bar_chart(buckets, value_key: "requests", error_key: "errors")
+  latency_svg = svg_line_chart(
+    buckets,
+    series: [
+      { label: "TTFT p50", color: "#2563eb", aggregator: ->(b) { percentile(b["ttft"], 50) } },
+      { label: "TTFT p95", color: "#93c5fd", aggregator: ->(b) { percentile(b["ttft"], 95) } },
+      { label: "Total p50", color: "#16a34a", aggregator: ->(b) { percentile(b["duration"], 50) } },
+      { label: "Total p95", color: "#86efac", aggregator: ->(b) { percentile(b["duration"], 95) } }
+    ]
+  )
+  tps_svg = svg_line_chart(
+    buckets,
+    series: [
+      {
+        label: "tokens/sec avg",
+        color: "#ca8a04",
+        aggregator: lambda { |b|
+          vals = b["tokens_per_sec"]
+          vals.empty? ? nil : vals.sum / vals.size.to_f
+        }
+      }
+    ]
+  )
+  tokens_svg = svg_stacked_token_chart(buckets)
+
+  <<~HTML
+    <section class="stats" aria-label="Summary">
+      <div class="stat stat-primary">
+        <span class="stat-value">#{format_int(summary["requests"])}</span>
+        <span class="stat-label">Requests</span>
+      </div>
+      <div class="stat #{summary["errors"].positive? ? "stat-warn" : ""}">
+        <span class="stat-value">#{h(format_rate(summary["error_rate"]))}</span>
+        <span class="stat-label">Error rate (#{summary["errors"]})</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{format_int(summary["retries"])}</span>
+        <span class="stat-label">Retries</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{h(format_ms(summary["ttft_p50"]))}</span>
+        <span class="stat-label">TTFT p50</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{h(format_ms(summary["ttft_p95"]))}</span>
+        <span class="stat-label">TTFT p95</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{h(format_ms(summary["duration_p50"]))}</span>
+        <span class="stat-label">Latency p50</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{h(format_ms(summary["duration_p95"]))}</span>
+        <span class="stat-label">Latency p95</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">#{h(format_tps(summary["tokens_per_sec_avg"]))}</span>
+        <span class="stat-label">Tokens/sec avg</span>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Traffic</h2>
+        <p class="panel-hint">Requests per bucket · red = errors</p>
+        #{traffic_svg}
+        <div class="legend-row">
+          <span><span class="swatch" style="background:#2563eb"></span>ok</span>
+          <span><span class="swatch" style="background:#dc2626"></span>errors</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Latency</h2>
+        <p class="panel-hint">TTFT and total latency percentiles over time</p>
+        #{latency_svg}
+      </section>
+
+      <section class="panel">
+        <h2>Tokens / sec</h2>
+        <p class="panel-hint">output_tokens / generation time (duration − TTFT)</p>
+        #{tps_svg}
+      </section>
+
+      <section class="panel">
+        <h2>Tokens</h2>
+        <div class="token-pills">
+          <span class="pill"><strong>#{format_int(summary["input_tokens"])}</strong> input</span>
+          <span class="pill"><strong>#{format_int(summary["output_tokens"])}</strong> output</span>
+          <span class="pill"><strong>#{format_int(summary["cache_read_tokens"])}</strong> cached</span>
+          <span class="pill"><strong>#{format_int(summary["cache_creation_tokens"])}</strong> cache write</span>
+          <span class="pill"><strong>#{format_int(summary["reasoning_tokens"])}</strong> reasoning</span>
+        </div>
+        #{tokens_svg}
+      </section>
+
+      <section class="panel">
+        <h2>Errors</h2>
+        #{render_error_breakdown(error_breakdown)}
+      </section>
+
+      <section class="panel">
+        <h2>Recent failures &amp; retries</h2>
+        #{render_failures(failures)}
+      </section>
+
+      <section class="panel panel-full">
+        <h2>Per model</h2>
+        #{render_model_table(models)}
+      </section>
+    </div>
+  HTML
+end
+
+def render_error_breakdown(rows)
+  return %(<p class="muted">No errors in this range.</p>) if rows.empty?
+
+  body = rows.map do |r|
+    <<~HTML
+      <tr>
+        <td class="mono error-text">#{h(r["error"])}</td>
+        <td class="num">#{r["count"]}</td>
+      </tr>
+    HTML
+  end.join
+
+  <<~HTML
+    <table>
+      <thead><tr><th>Error</th><th class="num">Count</th></tr></thead>
+      <tbody>#{body}</tbody>
+    </table>
+  HTML
+end
+
+def render_failures(rows)
+  return %(<p class="muted">No failures or retries in this range.</p>) if rows.empty?
+
+  body = rows.map do |r|
+    err = r["error"].to_s
+    err = "http_#{r["status"]}" if err.empty? && r["is_error"]
+    err = "—" if err.empty?
+    <<~HTML
+      <tr>
+        <td class="mono">#{h(format_ts(r["created_at"]))}</td>
+        <td class="mono">#{h(r["model"].empty? ? "—" : r["model"])}</td>
+        <td class="num">#{r["status"]}</td>
+        <td class="num">#{r["retry_count"]}</td>
+        <td class="mono error-text">#{h(err)}</td>
+      </tr>
+    HTML
+  end.join
+
+  <<~HTML
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Model</th><th class="num">Status</th>
+          <th class="num">Retries</th><th>Error</th>
+        </tr>
+      </thead>
+      <tbody>#{body}</tbody>
+    </table>
+  HTML
+end
+
+def render_model_table(models)
+  return %(<p class="muted">No model data.</p>) if models.empty?
+
+  body = models.map do |m|
+    <<~HTML
+      <tr>
+        <td class="mono">#{h(m["model"])}</td>
+        <td class="num">#{m["requests"]}</td>
+        <td class="num">#{h(format_ms(m["ttft_p50"]))}</td>
+        <td class="num">#{h(format_ms(m["duration_p50"]))}</td>
+        <td class="num">#{h(format_tps(m["tokens_per_sec_avg"]))}</td>
+        <td class="num">#{h(format_rate(m["error_rate"]))}</td>
+        <td class="num">#{format_int(m["input_tokens"])}</td>
+        <td class="num">#{format_int(m["output_tokens"])}</td>
+        <td class="num">#{format_int(m["cache_read_tokens"])}</td>
+        <td class="num">#{format_int(m["reasoning_tokens"])}</td>
+      </tr>
+    HTML
+  end.join
+
+  <<~HTML
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="num">Reqs</th>
+          <th class="num">TTFT p50</th>
+          <th class="num">Latency p50</th>
+          <th class="num">Tok/s</th>
+          <th class="num">Error %</th>
+          <th class="num">Input</th>
+          <th class="num">Output</th>
+          <th class="num">Cached</th>
+          <th class="num">Reasoning</th>
+        </tr>
+      </thead>
+      <tbody>#{body}</tbody>
+    </table>
+  HTML
+end
+
+def render_empty_state(filters_active:)
+  message = filters_active ? "No responses match these filters." : "No responses recorded yet."
+  hint = filters_active ? "Try widening the time range or clearing filters." : "Traffic recorded through jorm will show up here."
+
+  <<~HTML
+    <div class="state-panel">
+      <p class="state-title">#{h(message)}</p>
+      <p class="state-hint">#{h(hint)}</p>
+      #{'<a href="/" class="btn btn-ghost">Reset filters</a>' if filters_active}
+    </div>
+  HTML
+end
+
+def render_error_state(error)
+  <<~HTML
+    <div class="state-panel state-panel-error">
+      <p class="state-title">Couldn't load performance data</p>
+      <p class="state-hint">#{h(error)}</p>
+      <p class="state-hint">Check that GreptimeDB is running and reachable at the configured host/port. Re-run <code>bin/migrate</code> if timing columns are missing.</p>
+    </div>
+  HTML
+end
+
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
+
+server = WEBrick::HTTPServer.new(
+  Host: REPORT_HOST,
+  Port: REPORT_PORT,
+  Logger: WEBrick::Log.new($stderr, WEBrick::Log::INFO),
+  AccessLog: [[$stderr, WEBrick::AccessLog::COMMON_LOG_FORMAT]]
+)
+
+server.mount_proc "/" do |req, res|
+  range_preset = req.query["range"].to_s
+  range_preset = DEFAULT_RANGE unless RANGE_PRESETS.key?(range_preset) || range_preset.empty?
+  range_preset = DEFAULT_RANGE if range_preset.empty?
+  from_raw = req.query["from"].to_s
+  to_raw = req.query["to"].to_s
+  model_filter = req.query["model"].to_s
+
+  from_time, to_time, effective_preset = resolve_range(
+    preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw
+  )
+  range_preset = effective_preset if effective_preset
+
+  rows = []
+  all_models = []
+  error = nil
+  begin
+    raw = fetch_rows(from_time: from_time, to_time: to_time)
+    rows = raw.map { |r| normalize_row(r) }
+    all_models = available_models(rows)
+    rows = rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
+  rescue StandardError => e
+    error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
+    warn error
+  end
+
+  summary = build_summary(rows)
+  buckets_info = build_buckets(rows, from_time, to_time)
+  models = build_per_model(rows)
+  error_breakdown = build_error_breakdown(rows)
+  failures = recent_failures(rows)
+
+  res.status = 200
+  res["Content-Type"] = "text/html; charset=utf-8"
+  res.body = render_page(
+    rows: rows,
+    summary: summary,
+    buckets_info: buckets_info,
+    models: models,
+    error_breakdown: error_breakdown,
+    failures: failures,
+    range_preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw,
+    from_time: from_time,
+    to_time: to_time,
+    model_filter: model_filter,
+    available_models: all_models,
+    error: error
+  )
+end
+
+trap("INT") { server.shutdown }
+trap("TERM") { server.shutdown }
+
+puts "jorm LLM performance → http://#{REPORT_HOST}:#{REPORT_PORT}/"
+puts "  GreptimeDB HTTP: http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql?db=#{GREPTIME_DB}"
+server.start
