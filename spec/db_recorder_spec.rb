@@ -54,7 +54,7 @@ RSpec.describe Jorm::DbRecorder do
   end
 
   describe "#maybe_record_response" do
-    def capture_response_params(req, chunks, upstream_result, timing: nil)
+    def capture_response_params(req, chunks, upstream_result, timing = nil)
       timing ||= { started_at: nil, chunk_times: [], finished_at: nil }
       inserted = nil
       allow(connection).to receive(:exec_params) do |sql, params|
@@ -62,7 +62,7 @@ RSpec.describe Jorm::DbRecorder do
         inserted = params
       end
 
-      recorder.maybe_record_response(req, chunks, upstream_result, timing: timing)
+      recorder.maybe_record_response(req, chunks, upstream_result, timing)
       inserted
     end
 
@@ -127,7 +127,7 @@ RSpec.describe Jorm::DbRecorder do
       )
       timing = { started_at: 100.0, chunk_times: [100.05], finished_at: 100.2 }
 
-      params = capture_response_params(req, ['{"ok":true}'], upstream_result, timing: timing)
+      params = capture_response_params(req, ['{"ok":true}'], upstream_result, timing)
       _id, _jid, _status, _headers, _body, ttft_ms, duration_ms, _retries, error = params
 
       expect(duration_ms).to eq(200.0)
@@ -152,7 +152,7 @@ RSpec.describe Jorm::DbRecorder do
         finished_at: 10.25
       }
 
-      params = capture_response_params(req, chunks, upstream_result, timing: timing)
+      params = capture_response_params(req, chunks, upstream_result, timing)
       _id, _jid, _status, _headers, _body, ttft_ms, duration_ms, _retries, error = params
 
       expect(duration_ms).to eq(250.0)
@@ -171,7 +171,7 @@ RSpec.describe Jorm::DbRecorder do
       ]
       timing = { started_at: 1.0, chunk_times: [1.08], finished_at: 1.5 }
 
-      params = capture_response_params(req, chunks, upstream_result, timing: timing)
+      params = capture_response_params(req, chunks, upstream_result, timing)
       ttft_ms = params[5]
 
       expect(ttft_ms).to eq(80.0)
@@ -191,7 +191,7 @@ RSpec.describe Jorm::DbRecorder do
         req,
         ['{"error":{"message":"ignored"}}'],
         upstream_result,
-        timing: timing
+        timing
       )
       _id, _jid, status, _headers, _body, ttft_ms, duration_ms, retry_count, error = params
 
@@ -256,7 +256,7 @@ RSpec.describe Jorm::DbRecorder do
     it "does not touch a connection for maybe_record_response" do
       upstream_result = Jorm::UpstreamClient::Result.new(status: 200, headers: {})
       timing = { started_at: 1.0, chunk_times: [], finished_at: 1.1 }
-      expect { recorder.maybe_record_response(build_req, ["x"], upstream_result, timing: timing) }.not_to raise_error
+      expect { recorder.maybe_record_response(build_req, ["x"], upstream_result, timing) }.not_to raise_error
     end
   end
 end

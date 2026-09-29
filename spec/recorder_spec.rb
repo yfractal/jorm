@@ -132,7 +132,7 @@ RSpec.describe Jorm::Recorder do
         retries: 0
       )
 
-      recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result, timing: timing)
+      recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result, timing)
 
       record = written_records("res").first
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
@@ -156,7 +156,7 @@ RSpec.describe Jorm::Recorder do
         error: "timeout"
       )
 
-      recorder.maybe_record_response(req, ['{"error":"timeout"}'], upstream_result, timing: timing)
+      recorder.maybe_record_response(req, ['{"error":"timeout"}'], upstream_result, timing)
 
       record = written_records("res").first
       expect(record["response"]["retries"]).to eq(1)

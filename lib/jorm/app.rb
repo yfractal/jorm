@@ -37,7 +37,7 @@ module Jorm
           req,
           chunks,
           result,
-          timing: {
+          {
             started_at: req.started_at,
             chunk_times: chunk_times,
             finished_at: Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -65,7 +65,7 @@ module Jorm
         req,
         [],
         result,
-        timing: {
+        {
           started_at: req.started_at,
           chunk_times: [],
           finished_at: Process.clock_gettime(Process::CLOCK_MONOTONIC)

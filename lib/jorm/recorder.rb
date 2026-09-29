@@ -85,7 +85,7 @@ module Jorm
     # +chunks+ (body), tagged with +req+'s jorm_request_id, then writes
     # it out. +timing+ (started_at / chunk_times / finished_at) is
     # persisted alongside retries/error for debugging.
-    def maybe_record_response(req, chunks, upstream_result, timing:)
+    def maybe_record_response(req, chunks, upstream_result, timing)
       return unless enabled?
 
       record = {

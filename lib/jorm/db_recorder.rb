@@ -90,7 +90,7 @@ module Jorm
     #
     # +timing+ is a hash with :started_at / :chunk_times / :finished_at
     # (monotonic floats), always supplied by Jorm::App.
-    def maybe_record_response(req, chunks, upstream_result, timing:)
+    def maybe_record_response(req, chunks, upstream_result, timing)
       return unless enabled?
 
       id = SecureRandom.uuid

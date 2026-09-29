@@ -14,8 +14,8 @@ module Jorm
       each_recorder { |r| r.record_request(req, body_buffer, patched) }
     end
 
-    def maybe_record_response(req, chunks, upstream_result, timing:)
-      each_recorder { |r| r.maybe_record_response(req, chunks, upstream_result, timing: timing) }
+    def maybe_record_response(req, chunks, upstream_result, timing)
+      each_recorder { |r| r.maybe_record_response(req, chunks, upstream_result, timing) }
     end
 
     private
