@@ -55,6 +55,7 @@ RSpec.describe Jorm::DbRecorder do
 
   describe "#maybe_record_response" do
     def capture_response_params(req, chunks, upstream_result, timing: nil)
+      timing ||= { started_at: nil, chunk_times: [], finished_at: nil }
       inserted = nil
       allow(connection).to receive(:exec_params) do |sql, params|
         expect(sql).to include("INSERT INTO responses")
@@ -254,7 +255,8 @@ RSpec.describe Jorm::DbRecorder do
 
     it "does not touch a connection for maybe_record_response" do
       upstream_result = Jorm::UpstreamClient::Result.new(status: 200, headers: {})
-      expect { recorder.maybe_record_response(build_req, ["x"], upstream_result) }.not_to raise_error
+      timing = { started_at: 1.0, chunk_times: [], finished_at: 1.1 }
+      expect { recorder.maybe_record_response(build_req, ["x"], upstream_result, timing: timing) }.not_to raise_error
     end
   end
 end

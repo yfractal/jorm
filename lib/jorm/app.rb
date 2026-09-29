@@ -31,7 +31,6 @@ module Jorm
         return record_and_return_upstream_error(req, e)
       end
 
-      puts "result=#{result}"
       # record response from the upstream
       rack_body = TeeBody.new(result.body) do |chunks, chunk_times|
         @recorder.maybe_record_response(

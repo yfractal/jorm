@@ -5,6 +5,7 @@ require_relative "spec_helper"
 RSpec.describe Jorm::CompositeRecorder do
   let(:good) { double("recorder") }
   let(:bad) { double("recorder") }
+  let(:timing) { { started_at: 1.0, chunk_times: [1.1], finished_at: 1.2 } }
 
   subject(:composite) { described_class.new([bad, good]) }
 
@@ -34,15 +35,15 @@ RSpec.describe Jorm::CompositeRecorder do
       allow(bad).to receive(:maybe_record_response).and_raise("boom")
       allow(good).to receive(:maybe_record_response)
 
-      expect { composite.maybe_record_response(:req, ["chunk"], :result) }.not_to raise_error
+      expect { composite.maybe_record_response(:req, ["chunk"], :result, timing: timing) }.not_to raise_error
 
-      expect(good).to have_received(:maybe_record_response).with(:req, ["chunk"], :result, timing: nil)
+      expect(good).to have_received(:maybe_record_response)
+        .with(:req, ["chunk"], :result, timing: timing)
     end
 
     it "forwards the timing keyword to every recorder" do
       allow(bad).to receive(:maybe_record_response)
       allow(good).to receive(:maybe_record_response)
-      timing = { started_at: 1.0, chunk_times: [1.1], finished_at: 1.2 }
 
       composite.maybe_record_response(:req, ["chunk"], :result, timing: timing)
 

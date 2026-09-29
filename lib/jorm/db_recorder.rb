@@ -89,9 +89,8 @@ module Jorm
     # nil for an empty body -- rather than always storing raw chunk text.
     #
     # +timing+ is a hash with :started_at / :chunk_times / :finished_at
-    # (monotonic floats). Optional so older call sites and tests keep
-    # working; missing timing leaves the timing columns NULL.
-    def maybe_record_response(req, chunks, upstream_result, timing: nil)
+    # (monotonic floats), always supplied by Jorm::App.
+    def maybe_record_response(req, chunks, upstream_result, timing:)
       return unless enabled?
 
       id = SecureRandom.uuid
@@ -135,8 +134,6 @@ module Jorm
     private
 
     def derive_duration_ms(timing)
-      return nil unless timing
-
       started = timing[:started_at]
       finished = timing[:finished_at]
       return nil unless started && finished
@@ -147,12 +144,13 @@ module Jorm
     # Time-to-first-token: for streaming responses, ms until the first
     # chunk that contains a content_block_delta (text or thinking). For
     # a successful non-streaming JSON response, equals duration_ms. NULL
-    # when the response is an error or when timing is unavailable.
+    # when the response is an error.
     def derive_ttft_ms(timing:, duration_ms:, status:, error:, content_type:, chunks:)
       return nil if error || status.to_i >= 400
-      return nil unless timing && timing[:started_at]
 
       started = timing[:started_at]
+      return nil unless started
+
       content_type = content_type.to_s
 
       if content_type.include?("text/event-stream")

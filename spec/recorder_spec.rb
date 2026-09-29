@@ -119,6 +119,8 @@ RSpec.describe Jorm::Recorder do
   end
 
   describe "#maybe_record_response" do
+    let(:timing) { { started_at: 1.0, chunk_times: [1.05], finished_at: 1.2 } }
+
     it "builds and writes a response record tagged with the request's jorm_request_id" do
       req = build_req
       upstream_result = Jorm::UpstreamClient::Result.new(
@@ -130,7 +132,7 @@ RSpec.describe Jorm::Recorder do
         retries: 0
       )
 
-      recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result)
+      recorder.maybe_record_response(req, ['{"token":"sk-abcdefghijk"}'], upstream_result, timing: timing)
 
       record = written_records("res").first
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
@@ -138,6 +140,11 @@ RSpec.describe Jorm::Recorder do
       expect(record["response"]["headers"]["authorization"]).to eq("***redacted***")
       expect(record["response"]["body"]).to eq({ "token" => "sk-***redacted***" })
       expect(record["response"]["retries"]).to eq(0)
+      expect(record["response"]["timing"]).to eq(
+        "startedAt" => 1.0,
+        "chunkTimes" => [1.05],
+        "finishedAt" => 1.2
+      )
     end
 
     it "persists timing, retries and error when provided" do
@@ -148,7 +155,6 @@ RSpec.describe Jorm::Recorder do
         retries: 1,
         error: "timeout"
       )
-      timing = { started_at: 1.0, chunk_times: [1.05], finished_at: 1.2 }
 
       recorder.maybe_record_response(req, ['{"error":"timeout"}'], upstream_result, timing: timing)
 
