@@ -21,6 +21,7 @@
 require "cgi"
 require "json"
 require "net/http"
+require "pathname"
 require "time"
 require "uri"
 require "webrick"
@@ -30,6 +31,14 @@ REPORT_PORT = Integer(ENV.fetch("JO_REPORT_PORT", "4891"))
 GREPTIME_HOST = ENV.fetch("GREPTIMEDB_HTTP_HOST", "127.0.0.1")
 GREPTIME_PORT = Integer(ENV.fetch("GREPTIMEDB_HTTP_PORT", "4000"))
 GREPTIME_DB = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
+
+DEMO_MODE = ARGV.delete("--demo") || %w[1 true].include?(ENV["JO_DEMO"].to_s.downcase)
+DEMO_FIXTURE = Pathname(
+  ENV.fetch(
+    "JO_DEMO_FIXTURE",
+    File.expand_path("../spec/fixtures/llm_performance_demo.json", __dir__)
+  )
+)
 
 RANGE_PRESETS = {
   "1h" => 3600,
@@ -126,6 +135,8 @@ def resolve_range(preset:, from_raw:, to_raw:)
 end
 
 def fetch_rows(from_time:, to_time:)
+  return fetch_demo_rows(from_time: from_time, to_time: to_time) if DEMO_MODE
+
   clauses = ["1 = 1"]
   clauses << "resp.created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
   clauses << "resp.created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
@@ -141,6 +152,32 @@ def fetch_rows(from_time:, to_time:)
   SQL
 
   sql_query(sql)
+end
+
+# Loads spec/fixtures/llm_performance_demo.json and materializes created_at
+# from each row's offset_seconds relative to now, then applies the same
+# from/to filter as the GreptimeDB path.
+def fetch_demo_rows(from_time:, to_time:)
+  raise "Demo fixture missing: #{DEMO_FIXTURE}" unless DEMO_FIXTURE.file?
+
+  payload = JSON.parse(DEMO_FIXTURE.read)
+  now = Time.now.utc
+  (payload["rows"] || []).filter_map do |row|
+    created_at = now + Integer(row["offset_seconds"])
+    next if from_time && created_at < from_time
+    next if to_time && created_at > to_time
+
+    {
+      "created_at" => created_at,
+      "status" => row["status"],
+      "ttft_ms" => row["ttft_ms"],
+      "duration_ms" => row["duration_ms"],
+      "retry_count" => row["retry_count"],
+      "error" => row["error"],
+      "body" => row["body"].is_a?(String) ? row["body"] : JSON.generate(row["body"]),
+      "req_body" => row["req_body"].is_a?(String) ? row["req_body"] : JSON.generate(row["req_body"])
+    }
+  end.sort_by { |r| r["created_at"] }
 end
 
 def extract_think_effort(req_body)
@@ -1052,7 +1089,11 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
         <h1>LLM performance</h1>
         <p class="subtitle">
           Traffic, latency, TTFT, tokens/sec and token breakdown from proxied responses.
-          Timing columns require a recent proxy; older rows still contribute token and error stats.
+          #{if DEMO_MODE
+              "Demo mode — serving synthetic data from <code>#{h(DEMO_FIXTURE.basename)}</code>."
+            else
+              "Timing columns require a recent proxy; older rows still contribute token and error stats."
+            end}
         </p>
       </header>
 
@@ -1484,7 +1525,7 @@ def render_error_state(error)
     <div class="state-panel state-panel-error">
       <p class="state-title">Couldn't load performance data</p>
       <p class="state-hint">#{h(error)}</p>
-      <p class="state-hint">Check that GreptimeDB is running and reachable at the configured host/port. Re-run <code>bin/migrate</code> if timing columns are missing.</p>
+      <p class="state-hint">#{DEMO_MODE ? "Check that the demo fixture exists (spec/fixtures/llm_performance_demo.json), or regenerate it with ruby spec/fixtures/generate_llm_performance_demo.rb." : "Check that GreptimeDB is running and reachable at the configured host/port. Re-run <code>bin/migrate</code> if timing columns are missing."}</p>
     </div>
   HTML
 end
@@ -1526,7 +1567,8 @@ server.mount_proc "/" do |req, res|
     all_models = available_models(rows)
     rows = rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
   rescue StandardError => e
-    error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
+    source = DEMO_MODE ? "demo fixture" : "GreptimeDB"
+    error = "Failed to load #{source}: #{e.class}: #{e.message}"
     warn error
   end
 
@@ -1566,5 +1608,10 @@ trap("INT") { server.shutdown }
 trap("TERM") { server.shutdown }
 
 puts "jorm LLM performance → http://#{REPORT_HOST}:#{REPORT_PORT}/"
-puts "  GreptimeDB HTTP: http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql?db=#{GREPTIME_DB}"
+if DEMO_MODE
+  puts "  Demo mode: #{DEMO_FIXTURE}"
+else
+  puts "  GreptimeDB HTTP: http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql?db=#{GREPTIME_DB}"
+  puts "  Tip: JO_DEMO=1 bin/llm_performance  # synthetic fixture, no DB needed"
+end
 server.start

@@ -1,0 +1,3509 @@
+{
+  "description": "Synthetic LLM performance rows for demo mode. offset_seconds is relative to now when loaded.",
+  "generated_by": "spec/fixtures/generate_llm_performance_demo.rb",
+  "seed": 42,
+  "rows": [
+    {
+      "offset_seconds": -21600,
+      "status": 429,
+      "ttft_ms": null,
+      "duration_ms": 7199,
+      "retry_count": 0,
+      "error": "Too many requests",
+      "body": {
+        "error": {
+          "message": "Too many requests"
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 0"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -21360,
+      "status": 200,
+      "ttft_ms": 3382,
+      "duration_ms": 8069,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-1",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 1"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11911,
+          "output_tokens": 125,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 161
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 1"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -21120,
+      "status": 200,
+      "ttft_ms": 730,
+      "duration_ms": 4299,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-2",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 2"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7749,
+          "output_tokens": 236,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 2"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -20880,
+      "status": 200,
+      "ttft_ms": 1185,
+      "duration_ms": 4240,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-3",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 3"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5355,
+          "output_tokens": 124,
+          "cache_read_input_tokens": 21,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 98
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 3"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -20640,
+      "status": 200,
+      "ttft_ms": 3484,
+      "duration_ms": 8558,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-4",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 4"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8649,
+          "output_tokens": 147,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 24
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 4"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -20400,
+      "status": 200,
+      "ttft_ms": 789,
+      "duration_ms": 4546,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-5",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 5"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5458,
+          "output_tokens": 253,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 363,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 5"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -20160,
+      "status": 200,
+      "ttft_ms": 1366,
+      "duration_ms": 4297,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-6",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 6"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4356,
+          "output_tokens": 131,
+          "cache_read_input_tokens": 646,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 30
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 6"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -19920,
+      "status": 200,
+      "ttft_ms": 2740,
+      "duration_ms": 7506,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-7",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 7"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9592,
+          "output_tokens": 114,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 69
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 7"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -19680,
+      "status": 200,
+      "ttft_ms": 613,
+      "duration_ms": 3654,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-8",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 8"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8313,
+          "output_tokens": 182,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 8"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -19440,
+      "status": 200,
+      "ttft_ms": 1364,
+      "duration_ms": 4361,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-9",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 9"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6286,
+          "output_tokens": 142,
+          "cache_read_input_tokens": 3003,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 17
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 9"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -19200,
+      "status": 200,
+      "ttft_ms": 1934,
+      "duration_ms": 6739,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-10",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 10"
+          }
+        ],
+        "usage": {
+          "input_tokens": 2385,
+          "output_tokens": 130,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 359,
+          "output_tokens_details": {
+            "thinking_tokens": 141
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 10"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -18960,
+      "status": 502,
+      "ttft_ms": null,
+      "duration_ms": 4422,
+      "retry_count": 1,
+      "error": "Connection reset by peer",
+      "body": {
+        "error": {
+          "message": "Connection reset by peer"
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 11"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -18720,
+      "status": 200,
+      "ttft_ms": 1276,
+      "duration_ms": 4078,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-12",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 12"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6475,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 161,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 23
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 12"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -18480,
+      "status": 200,
+      "ttft_ms": 2715,
+      "duration_ms": 7770,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-13",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 13"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10267,
+          "output_tokens": 145,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 49
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 13"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -18240,
+      "status": 200,
+      "ttft_ms": 937,
+      "duration_ms": 4615,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-14",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 14"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5659,
+          "output_tokens": 251,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 14"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -18000,
+      "status": 200,
+      "ttft_ms": 987,
+      "duration_ms": 3466,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-15",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 15"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6076,
+          "output_tokens": 104,
+          "cache_read_input_tokens": 2062,
+          "cache_creation_input_tokens": 300,
+          "output_tokens_details": {
+            "thinking_tokens": 74
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 15"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -17760,
+      "status": 200,
+      "ttft_ms": 2420,
+      "duration_ms": 8172,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-16",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 16"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10487,
+          "output_tokens": 146,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 72
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 16"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -17520,
+      "status": 200,
+      "ttft_ms": 4140,
+      "duration_ms": 7331,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-17",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 17"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6692,
+          "output_tokens": 211,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 17"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -17280,
+      "status": 200,
+      "ttft_ms": 1289,
+      "duration_ms": 3619,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-18",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 18"
+          }
+        ],
+        "usage": {
+          "input_tokens": 3899,
+          "output_tokens": 110,
+          "cache_read_input_tokens": 134,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 81
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 18"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -17040,
+      "status": 200,
+      "ttft_ms": 2679,
+      "duration_ms": 8208,
+      "retry_count": 1,
+      "error": null,
+      "body": {
+        "id": "demo-msg-19",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 19"
+          }
+        ],
+        "usage": {
+          "input_tokens": 3254,
+          "output_tokens": 136,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 71
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 19"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -16800,
+      "status": 200,
+      "ttft_ms": 698,
+      "duration_ms": 4181,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-20",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 20"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8954,
+          "output_tokens": 225,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 34,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 20"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -16560,
+      "status": 200,
+      "ttft_ms": 1538,
+      "duration_ms": 4250,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-21",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 21"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11682,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 3840,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 14
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 21"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -16320,
+      "status": 200,
+      "ttft_ms": 3141,
+      "duration_ms": 8243,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-22",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 22"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9862,
+          "output_tokens": 154,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 36
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 22"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -16080,
+      "status": 429,
+      "ttft_ms": null,
+      "duration_ms": 3998,
+      "retry_count": 0,
+      "error": "Too many requests",
+      "body": {
+        "error": {
+          "message": "Too many requests"
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 23"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -15840,
+      "status": 200,
+      "ttft_ms": 1260,
+      "duration_ms": 4223,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-24",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 24"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9555,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 4191,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 141
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 24"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -15600,
+      "status": 200,
+      "ttft_ms": 3657,
+      "duration_ms": 8741,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-25",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 25"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7692,
+          "output_tokens": 132,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 142,
+          "output_tokens_details": {
+            "thinking_tokens": 180
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 25"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -15360,
+      "status": 200,
+      "ttft_ms": 1140,
+      "duration_ms": 4999,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-26",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 26"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10714,
+          "output_tokens": 271,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 26"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -15120,
+      "status": 200,
+      "ttft_ms": 1042,
+      "duration_ms": 4251,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-27",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 27"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11721,
+          "output_tokens": 161,
+          "cache_read_input_tokens": 1597,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 143
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 27"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -14880,
+      "status": 200,
+      "ttft_ms": 2695,
+      "duration_ms": 8346,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-28",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 28"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10355,
+          "output_tokens": 145,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 39
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 28"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -14640,
+      "status": 200,
+      "ttft_ms": 930,
+      "duration_ms": 3919,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-29",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 29"
+          }
+        ],
+        "usage": {
+          "input_tokens": 2106,
+          "output_tokens": 164,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 29"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -14400,
+      "status": 200,
+      "ttft_ms": 1432,
+      "duration_ms": 4159,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-30",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 30"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10274,
+          "output_tokens": 117,
+          "cache_read_input_tokens": 709,
+          "cache_creation_input_tokens": 136,
+          "output_tokens_details": {
+            "thinking_tokens": 71
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 30"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -14160,
+      "status": 200,
+      "ttft_ms": 3600,
+      "duration_ms": 8883,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-31",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 31"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8794,
+          "output_tokens": 137,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 127
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 31"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -13920,
+      "status": 200,
+      "ttft_ms": 1071,
+      "duration_ms": 5007,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-32",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 32"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7385,
+          "output_tokens": 212,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 32"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -13680,
+      "status": 200,
+      "ttft_ms": 1363,
+      "duration_ms": 4599,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-33",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 33"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11991,
+          "output_tokens": 130,
+          "cache_read_input_tokens": 3152,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 122
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 33"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -13440,
+      "status": 502,
+      "ttft_ms": null,
+      "duration_ms": 9008,
+      "retry_count": 1,
+      "error": "Connection reset by peer",
+      "body": {
+        "error": {
+          "message": "Connection reset by peer"
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 34"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -13200,
+      "status": 200,
+      "ttft_ms": 1002,
+      "duration_ms": 4955,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-35",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 35"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11769,
+          "output_tokens": 247,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 159,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 35"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -12960,
+      "status": 200,
+      "ttft_ms": 1509,
+      "duration_ms": 3855,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-36",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 36"
+          }
+        ],
+        "usage": {
+          "input_tokens": 1002,
+          "output_tokens": 111,
+          "cache_read_input_tokens": 183,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 132
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 36"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -12720,
+      "status": 200,
+      "ttft_ms": 2300,
+      "duration_ms": 7666,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-37",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 37"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8804,
+          "output_tokens": 164,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 125
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 37"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -12480,
+      "status": 200,
+      "ttft_ms": 797,
+      "duration_ms": 4578,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-38",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 38"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7087,
+          "output_tokens": 237,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 38"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -12240,
+      "status": 200,
+      "ttft_ms": 1408,
+      "duration_ms": 4655,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-39",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 39"
+          }
+        ],
+        "usage": {
+          "input_tokens": 3311,
+          "output_tokens": 146,
+          "cache_read_input_tokens": 1372,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 12
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 39"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -12000,
+      "status": 200,
+      "ttft_ms": 2559,
+      "duration_ms": 7922,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-40",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 40"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7346,
+          "output_tokens": 158,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 345,
+          "output_tokens_details": {
+            "thinking_tokens": 156
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 40"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -11760,
+      "status": 200,
+      "ttft_ms": 747,
+      "duration_ms": 4410,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-41",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 41"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9480,
+          "output_tokens": 200,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 41"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -11520,
+      "status": 200,
+      "ttft_ms": 1439,
+      "duration_ms": 4089,
+      "retry_count": 1,
+      "error": null,
+      "body": {
+        "id": "demo-msg-42",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 42"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5536,
+          "output_tokens": 135,
+          "cache_read_input_tokens": 1802,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 160
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 42"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -11280,
+      "status": 200,
+      "ttft_ms": 3338,
+      "duration_ms": 8200,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-43",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 43"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9615,
+          "output_tokens": 143,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 69
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 43"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -11040,
+      "status": 200,
+      "ttft_ms": 601,
+      "duration_ms": 4297,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-44",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 44"
+          }
+        ],
+        "usage": {
+          "input_tokens": 12715,
+          "output_tokens": 201,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 44"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -10800,
+      "status": 200,
+      "ttft_ms": 1252,
+      "duration_ms": 4412,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-45",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 45"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7958,
+          "output_tokens": 159,
+          "cache_read_input_tokens": 2056,
+          "cache_creation_input_tokens": 232,
+          "output_tokens_details": {
+            "thinking_tokens": 108
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 45"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -10560,
+      "status": 429,
+      "ttft_ms": null,
+      "duration_ms": 8997,
+      "retry_count": 0,
+      "error": "Too many requests",
+      "body": {
+        "error": {
+          "message": "Too many requests"
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 46"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -10320,
+      "status": 200,
+      "ttft_ms": 653,
+      "duration_ms": 4596,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-47",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 47"
+          }
+        ],
+        "usage": {
+          "input_tokens": 2448,
+          "output_tokens": 273,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 47"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -10080,
+      "status": 200,
+      "ttft_ms": 1219,
+      "duration_ms": 3422,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-48",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 48"
+          }
+        ],
+        "usage": {
+          "input_tokens": 12175,
+          "output_tokens": 102,
+          "cache_read_input_tokens": 2557,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 108
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 48"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -9840,
+      "status": 200,
+      "ttft_ms": 2052,
+      "duration_ms": 7565,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-49",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 49"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5233,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 49"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -9600,
+      "status": 200,
+      "ttft_ms": 762,
+      "duration_ms": 4518,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-50",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 50"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9152,
+          "output_tokens": 214,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 67,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 50"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -9360,
+      "status": 200,
+      "ttft_ms": 4201,
+      "duration_ms": 7116,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-51",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 51"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6815,
+          "output_tokens": 141,
+          "cache_read_input_tokens": 1415,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 144
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 51"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -9120,
+      "status": 200,
+      "ttft_ms": 3118,
+      "duration_ms": 8118,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-52",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 52"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11727,
+          "output_tokens": 132,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 124
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 52"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -8880,
+      "status": 200,
+      "ttft_ms": 1069,
+      "duration_ms": 4914,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-53",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 53"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4236,
+          "output_tokens": 220,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 53"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -8640,
+      "status": 200,
+      "ttft_ms": 1362,
+      "duration_ms": 3899,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-54",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 54"
+          }
+        ],
+        "usage": {
+          "input_tokens": 1025,
+          "output_tokens": 128,
+          "cache_read_input_tokens": 276,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 39
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 54"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -8400,
+      "status": 200,
+      "ttft_ms": 3532,
+      "duration_ms": 8415,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-55",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 55"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6400,
+          "output_tokens": 144,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 316,
+          "output_tokens_details": {
+            "thinking_tokens": 57
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 55"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -8160,
+      "status": 200,
+      "ttft_ms": 1115,
+      "duration_ms": 4461,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-56",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 56"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8479,
+          "output_tokens": 224,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 56"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -7920,
+      "status": 502,
+      "ttft_ms": null,
+      "duration_ms": 4111,
+      "retry_count": 1,
+      "error": "Connection reset by peer",
+      "body": {
+        "error": {
+          "message": "Connection reset by peer"
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 57"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -7680,
+      "status": 200,
+      "ttft_ms": 2417,
+      "duration_ms": 7115,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-58",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 58"
+          }
+        ],
+        "usage": {
+          "input_tokens": 1860,
+          "output_tokens": 141,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 33
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 58"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -7440,
+      "status": 200,
+      "ttft_ms": 948,
+      "duration_ms": 4244,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-59",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 59"
+          }
+        ],
+        "usage": {
+          "input_tokens": 1406,
+          "output_tokens": 208,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 59"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -7200,
+      "status": 200,
+      "ttft_ms": 898,
+      "duration_ms": 3697,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-60",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 60"
+          }
+        ],
+        "usage": {
+          "input_tokens": 990,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 252,
+          "cache_creation_input_tokens": 160,
+          "output_tokens_details": {
+            "thinking_tokens": 76
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 60"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -6960,
+      "status": 200,
+      "ttft_ms": 2027,
+      "duration_ms": 6644,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-61",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 61"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6654,
+          "output_tokens": 131,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 63
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 61"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -6720,
+      "status": 200,
+      "ttft_ms": 1169,
+      "duration_ms": 4654,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-62",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 62"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8255,
+          "output_tokens": 190,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 62"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -6480,
+      "status": 200,
+      "ttft_ms": 1462,
+      "duration_ms": 4523,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-63",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 63"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11529,
+          "output_tokens": 128,
+          "cache_read_input_tokens": 1409,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 26
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 63"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -6240,
+      "status": 200,
+      "ttft_ms": 3027,
+      "duration_ms": 7872,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-64",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 64"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6396,
+          "output_tokens": 130,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 179
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 64"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -6000,
+      "status": 200,
+      "ttft_ms": 1137,
+      "duration_ms": 4857,
+      "retry_count": 1,
+      "error": null,
+      "body": {
+        "id": "demo-msg-65",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 65"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7771,
+          "output_tokens": 238,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 390,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 65"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -5760,
+      "status": 200,
+      "ttft_ms": 835,
+      "duration_ms": 3619,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-66",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 66"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7455,
+          "output_tokens": 114,
+          "cache_read_input_tokens": 399,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 151
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 66"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -5520,
+      "status": 200,
+      "ttft_ms": 2871,
+      "duration_ms": 7941,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-67",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 67"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6719,
+          "output_tokens": 122,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 95
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 67"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -5280,
+      "status": 200,
+      "ttft_ms": 4212,
+      "duration_ms": 7586,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-68",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 68"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7093,
+          "output_tokens": 239,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 68"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -5040,
+      "status": 429,
+      "ttft_ms": null,
+      "duration_ms": 3782,
+      "retry_count": 0,
+      "error": "Too many requests",
+      "body": {
+        "error": {
+          "message": "Too many requests"
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 69"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -4800,
+      "status": 200,
+      "ttft_ms": 2977,
+      "duration_ms": 8579,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-70",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 70"
+          }
+        ],
+        "usage": {
+          "input_tokens": 3924,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 59,
+          "output_tokens_details": {
+            "thinking_tokens": 117
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 70"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -4560,
+      "status": 200,
+      "ttft_ms": 604,
+      "duration_ms": 4530,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-71",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 71"
+          }
+        ],
+        "usage": {
+          "input_tokens": 1676,
+          "output_tokens": 213,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 71"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -4320,
+      "status": 200,
+      "ttft_ms": 1149,
+      "duration_ms": 3295,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-72",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 72"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7879,
+          "output_tokens": 102,
+          "cache_read_input_tokens": 3891,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 153
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 72"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -4080,
+      "status": 200,
+      "ttft_ms": 2168,
+      "duration_ms": 7137,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-73",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 73"
+          }
+        ],
+        "usage": {
+          "input_tokens": 2493,
+          "output_tokens": 140,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 156
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 73"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -3840,
+      "status": 200,
+      "ttft_ms": 719,
+      "duration_ms": 4349,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-74",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 74"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5977,
+          "output_tokens": 221,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 74"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -3600,
+      "status": 200,
+      "ttft_ms": 1145,
+      "duration_ms": 3985,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-75",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 75"
+          }
+        ],
+        "usage": {
+          "input_tokens": 6749,
+          "output_tokens": 116,
+          "cache_read_input_tokens": 2838,
+          "cache_creation_input_tokens": 126,
+          "output_tokens_details": {
+            "thinking_tokens": 146
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 75"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -3360,
+      "status": 200,
+      "ttft_ms": 2912,
+      "duration_ms": 8593,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-76",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 76"
+          }
+        ],
+        "usage": {
+          "input_tokens": 11841,
+          "output_tokens": 179,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 105
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 76"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -3120,
+      "status": 200,
+      "ttft_ms": 717,
+      "duration_ms": 4076,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-77",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 77"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8204,
+          "output_tokens": 188,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 77"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -2880,
+      "status": 200,
+      "ttft_ms": 1071,
+      "duration_ms": 3874,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-78",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 78"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7804,
+          "output_tokens": 128,
+          "cache_read_input_tokens": 2294,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 85
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 78"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -2640,
+      "status": 200,
+      "ttft_ms": 2053,
+      "duration_ms": 7649,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-79",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 79"
+          }
+        ],
+        "usage": {
+          "input_tokens": 12348,
+          "output_tokens": 139,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 78
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 79"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -2400,
+      "status": 502,
+      "ttft_ms": null,
+      "duration_ms": 4454,
+      "retry_count": 1,
+      "error": "Connection reset by peer",
+      "body": {
+        "error": {
+          "message": "Connection reset by peer"
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 80"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -2160,
+      "status": 200,
+      "ttft_ms": 1017,
+      "duration_ms": 3590,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-81",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 81"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10627,
+          "output_tokens": 115,
+          "cache_read_input_tokens": 1757,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 81"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -1920,
+      "status": 200,
+      "ttft_ms": 1922,
+      "duration_ms": 7043,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-82",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 82"
+          }
+        ],
+        "usage": {
+          "input_tokens": 3649,
+          "output_tokens": 163,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 147
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 82"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -1680,
+      "status": 200,
+      "ttft_ms": 1041,
+      "duration_ms": 4609,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-83",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 83"
+          }
+        ],
+        "usage": {
+          "input_tokens": 5411,
+          "output_tokens": 224,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 83"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -1440,
+      "status": 200,
+      "ttft_ms": 815,
+      "duration_ms": 3706,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-84",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 84"
+          }
+        ],
+        "usage": {
+          "input_tokens": 9887,
+          "output_tokens": 147,
+          "cache_read_input_tokens": 3546,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 93
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 84"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -1200,
+      "status": 200,
+      "ttft_ms": 4199,
+      "duration_ms": 9488,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-85",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 85"
+          }
+        ],
+        "usage": {
+          "input_tokens": 10560,
+          "output_tokens": 151,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 178,
+          "output_tokens_details": {
+            "thinking_tokens": 180
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 85"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -960,
+      "status": 200,
+      "ttft_ms": 867,
+      "duration_ms": 4858,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-86",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 86"
+          }
+        ],
+        "usage": {
+          "input_tokens": 8523,
+          "output_tokens": 278,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 86"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+    {
+      "offset_seconds": -720,
+      "status": 200,
+      "ttft_ms": 1084,
+      "duration_ms": 3580,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-87",
+        "type": "message",
+        "role": "assistant",
+        "model": "inclusionai/ling-3.0-flash",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 87"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4173,
+          "output_tokens": 103,
+          "cache_read_input_tokens": 753,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 44
+          }
+        }
+      },
+      "req_body": {
+        "model": "inclusionai/ling-3.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 87"
+          }
+        ],
+        "max_tokens": 1024,
+        "thinking": {
+          "type": "adaptive"
+        }
+      }
+    },
+    {
+      "offset_seconds": -480,
+      "status": 200,
+      "ttft_ms": 2626,
+      "duration_ms": 8074,
+      "retry_count": 1,
+      "error": null,
+      "body": {
+        "id": "demo-msg-88",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-oss-120b",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 88"
+          }
+        ],
+        "usage": {
+          "input_tokens": 7548,
+          "output_tokens": 160,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 163
+          }
+        }
+      },
+      "req_body": {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 88"
+          }
+        ],
+        "max_tokens": 1024,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "offset_seconds": -240,
+      "status": 200,
+      "ttft_ms": 1017,
+      "duration_ms": 3931,
+      "retry_count": 0,
+      "error": null,
+      "body": {
+        "id": "demo-msg-89",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": [
+          {
+            "type": "text",
+            "text": "demo reply 89"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4067,
+          "output_tokens": 169,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        }
+      },
+      "req_body": {
+        "model": "anthropic/claude-sonnet-4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "demo prompt 89"
+          }
+        ],
+        "max_tokens": 1024
+      }
+    }
+  ]
+}

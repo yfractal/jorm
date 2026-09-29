@@ -122,6 +122,21 @@ before that change leave those columns NULL -- the page shows them as
 work from the stored body and status. Re-run `bin/migrate` after
 pulling so existing databases pick up the new columns.
 
+#### Demo mode (no GreptimeDB)
+
+```bash
+JO_DEMO=1 bin/llm_performance
+# or: bin/llm_performance --demo
+```
+
+Loads synthetic rows from
+[`spec/fixtures/llm_performance_demo.json`](spec/fixtures/llm_performance_demo.json)
+(relative timestamps, always in range). Regenerate with:
+
+```bash
+ruby spec/fixtures/generate_llm_performance_demo.rb
+```
+
 ### Session costs
 
 ```bash
@@ -138,6 +153,8 @@ Report env vars (shared):
 |---|---|---|
 | `JO_REPORT_HOST` | `127.0.0.1` | Bind host for report servers |
 | `JO_REPORT_PORT` | `4891` / `4890` | Bind port (`llm_performance` / `session_costs`) |
+| `JO_DEMO` | off | Set to `1` to serve `llm_performance` from the demo fixture |
+| `JO_DEMO_FIXTURE` | `spec/fixtures/llm_performance_demo.json` | Override demo fixture path |
 | `GREPTIMEDB_HTTP_HOST` | `127.0.0.1` | GreptimeDB HTTP API host |
 | `GREPTIMEDB_HTTP_PORT` | `4000` | GreptimeDB HTTP API port |
 | `GREPTIMEDB_DATABASE` | `jorm` | Database name |
