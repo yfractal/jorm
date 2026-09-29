@@ -515,7 +515,7 @@ MODEL_SORT_COLUMNS = {
 }.freeze
 
 MODEL_COLUMN_ORDER = %w[
-  model ttft_p50 tokens_per_sec_avg error_rate
+  model tokens_per_sec_avg ttft_p50 error_rate
   requests input_tokens output_tokens cache_read_tokens reasoning_tokens
 ].freeze
 
@@ -942,7 +942,6 @@ PAGE_CSS = <<~CSS
     height: 280px;
     margin-bottom: 1rem;
   }
-  .chart-wrap.tall { height: 330px; }
   .chart-wrap:last-child { margin-bottom: 0.5rem; }
   .chart-wrap canvas { width: 100% !important; height: 100% !important; }
   .chart-title {
@@ -1208,14 +1207,8 @@ def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_mode
 
     <div class="grid">
       <section class="panel panel-full">
-        <h2>Performance map</h2>
-        <p class="panel-hint">Lower TTFT and higher generation speed are visually separated. Hover a point for exact values.</p>
-        #{render_performance_map(models)}
-      </section>
-
-      <section class="panel panel-full">
-        <h2>Per model</h2>
-        <p class="panel-hint">One line per model over time · hover for exact TTFT / tok/s · table below for totals and think-effort</p>
+        <h2>Model Performance Metrics</h2>
+        <p class="panel-hint">One line per model over time · hover for exact tok/s / TTFT · table below for totals and think-effort</p>
         #{render_per_model_chart(model_timeseries)}
         #{render_model_table(
           models,
@@ -1332,98 +1325,6 @@ def short_model_label(model)
   "#{name[0, 25]}…"
 end
 
-def render_performance_map(models)
-  points = models.each_with_index.filter_map do |m, i|
-    ttft = m["ttft_p50"]
-    tps = m["tokens_per_sec_avg"]
-    next if ttft.nil? || tps.nil?
-
-    {
-      "name" => m["model"],
-      "label" => short_model_label(m["model"]),
-      "color" => MODEL_LINE_COLORS[i % MODEL_LINE_COLORS.size],
-      "ttft" => (ttft / 1000.0).round(3),
-      "toks" => tps.round(2),
-      "error" => m["error_rate"].to_f.round(1),
-      "reqs" => m["requests"]
-    }
-  end
-
-  return %(<p class="muted">No models with both TTFT and tok/s yet.</p>) if points.empty?
-
-  payload = { "points" => points }
-
-  <<~HTML
-    <div class="chart-wrap tall">
-      <canvas id="performance-map-chart" aria-label="Performance map: TTFT vs tokens per second"></canvas>
-    </div>
-    <script>
-      (function () {
-        const data = #{JSON.generate(payload)};
-        if (typeof Chart === "undefined") return;
-        const el = document.getElementById("performance-map-chart");
-        if (!el) return;
-
-        const fmtTtft = (v) => {
-          if (v == null || Number.isNaN(v)) return "n/a";
-          return v >= 1 ? v.toFixed(2) + "s" : Math.round(v * 1000) + "ms";
-        };
-        const fmtTps = (v) => (v == null || Number.isNaN(v) ? "n/a" : v.toFixed(1) + " tok/s");
-
-        new Chart(el, {
-          type: "scatter",
-          data: {
-            datasets: data.points.map((p) => ({
-              label: p.label,
-              fullName: p.name,
-              backgroundColor: p.color,
-              borderColor: p.color,
-              pointRadius: 9,
-              pointHoverRadius: 12,
-              data: [{ x: p.ttft, y: p.toks, error: p.error, reqs: p.reqs }]
-            }))
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: "top",
-                labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } }
-              },
-              tooltip: {
-                callbacks: {
-                  label: (ctx) => {
-                    const p = ctx.raw || {};
-                    const name = ctx.dataset.fullName || ctx.dataset.label;
-                    return name + ": " + fmtTtft(p.x) + " TTFT · " + fmtTps(p.y) +
-                      " · " + (p.error != null ? p.error.toFixed(1) + "% err" : "") +
-                      (p.reqs != null ? " · " + p.reqs + " reqs" : "");
-                  }
-                }
-              }
-            },
-            scales: {
-              x: {
-                title: { display: true, text: "TTFT p50 — lower is better" },
-                beginAtZero: true,
-                ticks: { callback: (v) => fmtTtft(v) },
-                grid: { color: "rgba(127,127,127,0.15)" }
-              },
-              y: {
-                title: { display: true, text: "Generation speed — higher is better" },
-                beginAtZero: true,
-                ticks: { callback: (v) => Number(v).toFixed(0) },
-                grid: { color: "rgba(127,127,127,0.15)" }
-              }
-            }
-          }
-        });
-      })();
-    </script>
-  HTML
-end
-
 def render_per_model_chart(timeseries)
   series = timeseries["series"] || []
   return %(<p class="muted">No model data.</p>) if series.empty? || timeseries["labels"].empty?
@@ -1442,13 +1343,13 @@ def render_per_model_chart(timeseries)
   }
 
   <<~HTML
-    <p class="chart-title">TTFT p50</p>
-    <div class="chart-wrap">
-      <canvas id="per-model-ttft-chart" aria-label="Per model TTFT over time"></canvas>
-    </div>
     <p class="chart-title">Tok/s</p>
     <div class="chart-wrap">
       <canvas id="per-model-tps-chart" aria-label="Per model tokens per second over time"></canvas>
+    </div>
+    <p class="chart-title">TTFT p50</p>
+    <div class="chart-wrap">
+      <canvas id="per-model-ttft-chart" aria-label="Per model TTFT over time"></canvas>
     </div>
     <script>
       (function () {
@@ -1506,21 +1407,21 @@ def render_per_model_chart(timeseries)
           }
         });
 
-        const ttftEl = document.getElementById("per-model-ttft-chart");
-        if (ttftEl) {
-          new Chart(ttftEl, {
-            type: "line",
-            data: { labels: data.labels, datasets: lineDatasets("ttftSeconds") },
-            options: commonOptions(fmtTtft, "TTFT p50", fmtTtft)
-          });
-        }
-
         const tpsEl = document.getElementById("per-model-tps-chart");
         if (tpsEl) {
           new Chart(tpsEl, {
             type: "line",
             data: { labels: data.labels, datasets: lineDatasets("tokensPerSec") },
             options: commonOptions(fmtTps, "Tok/s", (v) => Number(v).toFixed(0))
+          });
+        }
+
+        const ttftEl = document.getElementById("per-model-ttft-chart");
+        if (ttftEl) {
+          new Chart(ttftEl, {
+            type: "line",
+            data: { labels: data.labels, datasets: lineDatasets("ttftSeconds") },
+            options: commonOptions(fmtTtft, "TTFT p50", fmtTtft)
           });
         }
       })();
@@ -1530,8 +1431,8 @@ end
 
 def render_model_metric_cells(row)
   <<~HTML.strip
-    <td class="num">#{h(format_ms(row["ttft_p50"]))}</td>
     <td class="num">#{h(format_tps(row["tokens_per_sec_avg"]))}</td>
+    <td class="num">#{h(format_ms(row["ttft_p50"]))}</td>
     <td class="num">#{h(format_rate(row["error_rate"]))}</td>
     <td class="num">#{row["requests"]}</td>
     <td class="num">#{format_int(row["input_tokens"])}</td>
