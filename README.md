@@ -25,7 +25,9 @@ bin/migrate
 at `http://localhost:4000/dashboard`). `bin/migrate` creates the
 `jorm` database if it doesn't exist, then applies `db/schema.sql`
 (idempotent -- safe to re-run) via GreptimeDB's PostgreSQL wire
-protocol (port 4003).
+protocol (port 4003). Re-running migrate also adds any new non-key
+columns (e.g. `ttft_ms`, `duration_ms`, `retry_count`, `error` on
+`responses`) to an existing table via `ALTER TABLE ... ADD COLUMN`.
 
 To wipe everything and start fresh (like Rails `db:reset`):
 
@@ -96,6 +98,49 @@ writes are file-locked to keep concurrent appends from interleaving.
 Sensitive headers (`authorization`, `x-api-key`) and `sk-...` tokens in
 bodies are redacted before being recorded (both to GreptimeDB and to
 dump files); forwarded traffic is unchanged.
+
+## Reports
+
+Two standalone WEBrick report servers read from GreptimeDB's HTTP SQL
+API (port 4000 by default). They need no Gemfile gems beyond stdlib.
+
+### LLM performance
+
+```bash
+bin/llm_performance
+# → http://127.0.0.1:4891/
+```
+
+Shows traffic, TTFT, total latency, tokens/sec, token breakdown
+(input / output / cached / reasoning), errors and retries. Filter by
+time range (1h / 6h / 24h / 7d or custom) and model.
+
+Timing and retry fields are written by the proxy on each `responses`
+row (`ttft_ms`, `duration_ms`, `retry_count`, `error`). Rows recorded
+before that change leave those columns NULL -- the page shows them as
+`n/a` and excludes them from latency stats; token and error stats still
+work from the stored body and status. Re-run `bin/migrate` after
+pulling so existing databases pick up the new columns.
+
+### Session costs
+
+```bash
+bin/session_costs
+# → http://127.0.0.1:4890/
+```
+
+OpenRouter-only per-Claude-Code-session spend report (reads
+`usage.cost` from reassembled response bodies).
+
+Report env vars (shared):
+
+| Variable | Default | Description |
+|---|---|---|
+| `JO_REPORT_HOST` | `127.0.0.1` | Bind host for report servers |
+| `JO_REPORT_PORT` | `4891` / `4890` | Bind port (`llm_performance` / `session_costs`) |
+| `GREPTIMEDB_HTTP_HOST` | `127.0.0.1` | GreptimeDB HTTP API host |
+| `GREPTIMEDB_HTTP_PORT` | `4000` | GreptimeDB HTTP API port |
+| `GREPTIMEDB_DATABASE` | `jorm` | Database name |
 
 ## Tests
 
