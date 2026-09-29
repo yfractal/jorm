@@ -235,6 +235,12 @@ def normalize_row(row)
   duration_ms = to_f_or_nil(row["duration_ms"])
   tokens_per_sec = compute_tokens_per_sec(output, duration_ms, ttft_ms)
 
+  model = body.is_a?(Hash) ? body["model"].to_s : ""
+  if model.empty?
+    req = parse_json_maybe(row["req_body"])
+    model = req["model"].to_s if req.is_a?(Hash)
+  end
+
   {
     "created_at" => to_time(row["created_at"]),
     "status" => status,
@@ -243,7 +249,7 @@ def normalize_row(row)
     "retry_count" => to_i_or_zero(row["retry_count"]),
     "error" => error,
     "is_error" => is_error,
-    "model" => body.is_a?(Hash) ? body["model"].to_s : "",
+    "model" => model,
     "think_effort" => extract_think_effort(row["req_body"]),
     "input_tokens" => input,
     "output_tokens" => output,
