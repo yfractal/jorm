@@ -127,17 +127,54 @@ end
 
 def fetch_rows(from_time:, to_time:)
   clauses = ["1 = 1"]
-  clauses << "created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
-  clauses << "created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+  clauses << "resp.created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
+  clauses << "resp.created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
 
   sql = <<~SQL
-    SELECT created_at, status, ttft_ms, duration_ms, retry_count, error, body
-    FROM responses
+    SELECT resp.created_at, resp.status, resp.ttft_ms, resp.duration_ms,
+           resp.retry_count, resp.error, resp.body,
+           r.body AS req_body
+    FROM responses resp
+    LEFT JOIN requests r ON r.jorm_request_id = resp.jorm_request_id
     WHERE #{clauses.join(" AND ")}
-    ORDER BY created_at ASC
+    ORDER BY resp.created_at ASC
   SQL
 
   sql_query(sql)
+end
+
+def extract_think_effort(req_body)
+  body = parse_json_maybe(req_body)
+  return "(none)" unless body.is_a?(Hash)
+
+  if (effort = body["reasoning_effort"])
+    return effort.to_s
+  end
+  if (effort = body.dig("reasoning", "effort"))
+    return effort.to_s
+  end
+
+  thinking = body["thinking"]
+  case thinking
+  when nil
+    "(none)"
+  when false
+    "disabled"
+  when true
+    "enabled"
+  when Hash
+    if thinking["type"].to_s == "disabled"
+      "disabled"
+    elsif thinking.key?("budget_tokens")
+      "budget:#{thinking["budget_tokens"]}"
+    elsif thinking["type"]
+      thinking["type"].to_s
+    else
+      thinking.inspect
+    end
+  else
+    thinking.to_s
+  end
 end
 
 def normalize_row(row)
@@ -170,6 +207,7 @@ def normalize_row(row)
     "error" => error,
     "is_error" => is_error,
     "model" => body.is_a?(Hash) ? body["model"].to_s : "",
+    "think_effort" => extract_think_effort(row["req_body"]),
     "input_tokens" => input,
     "output_tokens" => output,
     "cache_read_tokens" => cache_read,
@@ -305,6 +343,22 @@ def build_summary(rows)
   }
 end
 
+def aggregate_metric_rows(group_rows, extras = {})
+  ttfts = group_rows.filter_map { |r| r["ttft_ms"] }
+  tps = group_rows.filter_map { |r| r["tokens_per_sec"] }
+  errors = group_rows.count { |r| r["is_error"] }
+  extras.merge(
+    "requests" => group_rows.size,
+    "ttft_p50" => percentile(ttfts, 50),
+    "tokens_per_sec_avg" => tps.empty? ? nil : (tps.sum / tps.size.to_f),
+    "error_rate" => group_rows.empty? ? 0.0 : (100.0 * errors / group_rows.size),
+    "input_tokens" => group_rows.sum { |r| r["input_tokens"] },
+    "output_tokens" => group_rows.sum { |r| r["output_tokens"] },
+    "cache_read_tokens" => group_rows.sum { |r| r["cache_read_tokens"] },
+    "reasoning_tokens" => group_rows.sum { |r| r["reasoning_tokens"] }
+  )
+end
+
 def build_per_model(rows)
   by_model = Hash.new { |h, k| h[k] = [] }
   rows.each do |row|
@@ -314,25 +368,35 @@ def build_per_model(rows)
   end
 
   by_model.map do |model, model_rows|
-    ttfts = model_rows.filter_map { |r| r["ttft_ms"] }
-    tps = model_rows.filter_map { |r| r["tokens_per_sec"] }
-    errors = model_rows.count { |r| r["is_error"] }
-    {
-      "model" => model,
-      "requests" => model_rows.size,
-      "ttft_p50" => percentile(ttfts, 50),
-      "tokens_per_sec_avg" => tps.empty? ? nil : (tps.sum / tps.size.to_f),
-      "error_rate" => model_rows.empty? ? 0.0 : (100.0 * errors / model_rows.size),
-      "input_tokens" => model_rows.sum { |r| r["input_tokens"] },
-      "output_tokens" => model_rows.sum { |r| r["output_tokens"] },
-      "cache_read_tokens" => model_rows.sum { |r| r["cache_read_tokens"] },
-      "reasoning_tokens" => model_rows.sum { |r| r["reasoning_tokens"] }
-    }
+    aggregate_metric_rows(model_rows, "model" => model)
   end
+end
+
+# Same metrics as per-model, grouped by model + think effort (from the
+# request body's thinking / reasoning_effort fields).
+def build_per_model_effort(rows)
+  by_key = Hash.new { |h, k| h[k] = [] }
+  rows.each do |row|
+    model = row["model"].to_s
+    model = "(unknown)" if model.empty?
+    by_key[[model, row["think_effort"]]] << row
+  end
+
+  by_key.map do |(model, effort), group_rows|
+    aggregate_metric_rows(group_rows, "model" => model, "think_effort" => effort)
+  end
+end
+
+def efforts_for_model(effort_rows, model, sort_key, sort_dir)
+  subset = effort_rows.select { |r| r["model"] == model }
+  child_sort = sort_key == "model" ? "think_effort" : sort_key
+  child_dir = sort_key == "model" ? "asc" : sort_dir
+  sort_models(subset, child_sort, child_dir)
 end
 
 MODEL_SORT_COLUMNS = {
   "model" => { label: "Name", numeric: false },
+  "think_effort" => { label: "Think", numeric: false },
   "ttft_p50" => { label: "TTFT p50", numeric: true },
   "tokens_per_sec_avg" => { label: "Tok/s", numeric: true },
   "error_rate" => { label: "Error %", numeric: true },
@@ -792,7 +856,32 @@ PAGE_CSS = <<~CSS
   thead th.sortable .sort-indicator { margin-left: 0.25rem; opacity: 0.75; }
   thead th.num.sortable a { text-align: right; }
   tbody tr td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); }
-  tbody tr:hover td { background: rgba(127, 127, 127, 0.06); }
+  tbody tr.model-row td { font-weight: 500; }
+  tbody tr.model-row:hover td { background: rgba(127, 127, 127, 0.06); }
+  tbody tr.model-row.expanded td { background: rgba(37, 99, 235, 0.06); }
+  tbody tr.model-row .model-toggle {
+    color: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  tbody tr.model-row .model-toggle:hover { color: #2563eb; }
+  tbody tr.model-row .toggle-marker {
+    display: inline-block;
+    width: 0.85em;
+    color: #666;
+    font-size: 0.75em;
+  }
+  tbody tr.effort-row td { color: #555; font-weight: 400; }
+  tbody tr.effort-row .effort-label {
+    padding-left: 1.4rem;
+    color: #666;
+  }
+  @media (prefers-color-scheme: dark) {
+    tbody tr.effort-row td { color: #ccc; }
+    tbody tr.effort-row .effort-label { color: #aaa; }
+  }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .muted { color: #999; }
@@ -818,7 +907,8 @@ PAGE_CSS = <<~CSS
   .state-hint { color: #666; font-size: 0.88rem; margin: 0 0 1rem; }
 CSS
 
-def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failures:,
+def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_model:,
+                error_breakdown:, failures:,
                 range_preset:, from_raw:, to_raw:, from_time:, to_time:, model_filter:,
                 available_models:, sort_key:, sort_dir:, error: nil)
   filters_active = !model_filter.to_s.empty? || !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
@@ -830,7 +920,8 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
     to: to_raw,
     model: model_filter,
     sort: sort_key,
-    dir: sort_dir
+    dir: sort_dir,
+    expand: expand_model
   }
 
   body_html =
@@ -843,6 +934,8 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
         summary: summary,
         buckets_info: buckets_info,
         models: models,
+        effort_rows: effort_rows,
+        expand_model: expand_model,
         error_breakdown: error_breakdown,
         failures: failures,
         base_params: base_params,
@@ -901,6 +994,7 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
         <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
         <input type="hidden" name="sort" value="#{h(sort_key)}">
         <input type="hidden" name="dir" value="#{h(sort_dir)}">
+        #{%(<input type="hidden" name="expand" value="#{h(expand_model)}">) unless expand_model.to_s.empty?}
         <div class="field field-actions">
           <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
@@ -915,7 +1009,8 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
   HTML
 end
 
-def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failures:,
+def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_model:,
+                     error_breakdown:, failures:,
                      base_params:, sort_key:, sort_dir:)
   buckets = buckets_info["buckets"]
 
@@ -983,8 +1078,15 @@ def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failure
     <div class="grid">
       <section class="panel panel-full">
         <h2>Per model</h2>
-        <p class="panel-hint">Click a column header to sort</p>
-        #{render_model_table(models, base_params: base_params, sort_key: sort_key, sort_dir: sort_dir)}
+        <p class="panel-hint">Click a model to break down by think effort · click a column header to sort</p>
+        #{render_model_table(
+          models,
+          effort_rows: effort_rows,
+          expand_model: expand_model,
+          base_params: base_params,
+          sort_key: sort_key,
+          sort_dir: sort_dir
+        )}
       </section>
 
       <section class="panel">
@@ -1085,7 +1187,20 @@ def render_failures(rows)
   HTML
 end
 
-def render_model_table(models, base_params:, sort_key:, sort_dir:)
+def render_model_metric_cells(row)
+  <<~HTML.strip
+    <td class="num">#{h(format_ms(row["ttft_p50"]))}</td>
+    <td class="num">#{h(format_tps(row["tokens_per_sec_avg"]))}</td>
+    <td class="num">#{h(format_rate(row["error_rate"]))}</td>
+    <td class="num">#{row["requests"]}</td>
+    <td class="num">#{format_int(row["input_tokens"])}</td>
+    <td class="num">#{format_int(row["output_tokens"])}</td>
+    <td class="num">#{format_int(row["cache_read_tokens"])}</td>
+    <td class="num">#{format_int(row["reasoning_tokens"])}</td>
+  HTML
+end
+
+def render_model_table(models, effort_rows:, expand_model:, base_params:, sort_key:, sort_dir:)
   return %(<p class="muted">No model data.</p>) if models.empty?
 
   headers = MODEL_COLUMN_ORDER.map do |key|
@@ -1114,19 +1229,36 @@ def render_model_table(models, base_params:, sort_key:, sort_dir:)
   end.join
 
   body = models.map do |m|
-    <<~HTML
-      <tr>
-        <td class="mono">#{h(m["model"])}</td>
-        <td class="num">#{h(format_ms(m["ttft_p50"]))}</td>
-        <td class="num">#{h(format_tps(m["tokens_per_sec_avg"]))}</td>
-        <td class="num">#{h(format_rate(m["error_rate"]))}</td>
-        <td class="num">#{m["requests"]}</td>
-        <td class="num">#{format_int(m["input_tokens"])}</td>
-        <td class="num">#{format_int(m["output_tokens"])}</td>
-        <td class="num">#{format_int(m["cache_read_tokens"])}</td>
-        <td class="num">#{format_int(m["reasoning_tokens"])}</td>
+    expanded = expand_model == m["model"]
+    toggle_expand = expanded ? nil : m["model"]
+    toggle_href = query_string(base_params.merge(expand: toggle_expand))
+    marker = expanded ? "▾" : "▸"
+    row_class = expanded ? "model-row expanded" : "model-row"
+
+    parent = <<~HTML
+      <tr class="#{row_class}">
+        <td class="mono">
+          <a class="model-toggle" href="/#{h(toggle_href)}" title="#{expanded ? "Hide" : "Show"} think effort breakdown">
+            <span class="toggle-marker" aria-hidden="true">#{marker}</span>#{h(m["model"])}
+          </a>
+        </td>
+        #{render_model_metric_cells(m)}
       </tr>
     HTML
+
+    children = ""
+    if expanded
+      children = efforts_for_model(effort_rows, m["model"], sort_key, sort_dir).map do |e|
+        <<~HTML
+          <tr class="effort-row">
+            <td class="mono"><span class="effort-label">#{h(e["think_effort"])}</span></td>
+            #{render_model_metric_cells(e)}
+          </tr>
+        HTML
+      end.join
+    end
+
+    parent + children
   end.join
 
   <<~HTML
@@ -1181,6 +1313,7 @@ server.mount_proc "/" do |req, res|
   to_raw = req.query["to"].to_s
   model_filter = req.query["model"].to_s
   sort_key, sort_dir = normalize_model_sort(req.query["sort"], req.query["dir"])
+  expand_model = req.query["expand"].to_s
 
   from_time, to_time, effective_preset = resolve_range(
     preset: range_preset,
@@ -1205,6 +1338,8 @@ server.mount_proc "/" do |req, res|
   summary = build_summary(rows)
   buckets_info = build_buckets(rows, from_time, to_time)
   models = sort_models(build_per_model(rows), sort_key, sort_dir)
+  effort_rows = build_per_model_effort(rows)
+  expand_model = "" unless models.any? { |m| m["model"] == expand_model }
   error_breakdown = build_error_breakdown(rows)
   failures = recent_failures(rows)
 
@@ -1215,6 +1350,8 @@ server.mount_proc "/" do |req, res|
     summary: summary,
     buckets_info: buckets_info,
     models: models,
+    effort_rows: effort_rows,
+    expand_model: expand_model,
     error_breakdown: error_breakdown,
     failures: failures,
     range_preset: range_preset,
