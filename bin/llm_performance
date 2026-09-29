@@ -829,6 +829,12 @@ PAGE_CSS = <<~CSS
   }
   .panel-full { grid-column: 1 / -1; }
   .panel-hint { color: #666; font-size: 0.8rem; margin: -0.4rem 0 0.75rem; }
+  .chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 320px;
+  }
+  .chart-wrap canvas { width: 100% !important; height: 100% !important; }
 
   .chart { display: block; color: inherit; }
   .chart-label { font-size: 10px; fill: currentColor; opacity: 0.65; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -964,6 +970,7 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>LLM performance — jorm</title>
       <style>#{PAGE_CSS}</style>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
     </head>
     <body>
       <header class="page-header">
@@ -1078,7 +1085,8 @@ def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_mode
     <div class="grid">
       <section class="panel panel-full">
         <h2>Per model</h2>
-        <p class="panel-hint">Click a model to break down by think effort · click a column header to sort</p>
+        <p class="panel-hint">TTFT p50 (seconds) and tokens/sec by model · click a model row below for think-effort breakdown</p>
+        #{render_per_model_chart(models)}
         #{render_model_table(
           models,
           effort_rows: effort_rows,
@@ -1184,6 +1192,137 @@ def render_failures(rows)
       </thead>
       <tbody>#{body}</tbody>
     </table>
+  HTML
+end
+
+def short_model_label(model)
+  name = model.to_s
+  return name if name.length <= 28
+
+  "#{name[0, 25]}…"
+end
+
+def render_per_model_chart(models)
+  return %(<p class="muted">No model data.</p>) if models.empty?
+
+  labels = models.map { |m| short_model_label(m["model"]) }
+  ttft_s = models.map { |m| m["ttft_p50"] ? (m["ttft_p50"] / 1000.0).round(3) : nil }
+  tps = models.map { |m| m["tokens_per_sec_avg"]&.round(2) }
+  full_names = models.map { |m| m["model"] }
+
+  payload = {
+    labels: labels,
+    fullNames: full_names,
+    ttftSeconds: ttft_s,
+    tokensPerSec: tps
+  }
+
+  <<~HTML
+    <div class="chart-wrap">
+      <canvas id="per-model-chart" aria-label="Per model TTFT and tokens per second"></canvas>
+    </div>
+    <script>
+      (function () {
+        const data = #{JSON.generate(payload)};
+        const fmtTtft = (v) => {
+          if (v == null || Number.isNaN(v)) return "n/a";
+          return v >= 1 ? v.toFixed(2) + "s" : Math.round(v * 1000) + "ms";
+        };
+        const fmtTps = (v) => (v == null || Number.isNaN(v) ? "n/a" : v.toFixed(1) + " tok/s");
+
+        const ctx = document.getElementById("per-model-chart");
+        if (!ctx || typeof Chart === "undefined") return;
+
+        new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: data.labels,
+            datasets: [
+              {
+                label: "TTFT p50",
+                data: data.ttftSeconds,
+                yAxisID: "yTtft",
+                borderColor: "#2563eb",
+                backgroundColor: "rgba(37, 99, 235, 0.15)",
+                pointBackgroundColor: "#2563eb",
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                tension: 0.25,
+                spanGaps: true
+              },
+              {
+                label: "Tok/s",
+                data: data.tokensPerSec,
+                yAxisID: "yTps",
+                borderColor: "#ca8a04",
+                backgroundColor: "rgba(202, 138, 4, 0.15)",
+                pointBackgroundColor: "#ca8a04",
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                tension: 0.25,
+                spanGaps: true
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: {
+                position: "top",
+                labels: { boxWidth: 12, usePointStyle: true }
+              },
+              tooltip: {
+                callbacks: {
+                  title: (items) => {
+                    const i = items[0] && items[0].dataIndex;
+                    return data.fullNames[i] || "";
+                  },
+                  label: (item) => {
+                    if (item.dataset.yAxisID === "yTtft") {
+                      return "TTFT p50: " + fmtTtft(item.parsed.y);
+                    }
+                    return "Tok/s: " + fmtTps(item.parsed.y);
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: {
+                  maxRotation: 45,
+                  minRotation: 0,
+                  autoSkip: true,
+                  font: { size: 11 }
+                },
+                grid: { display: false }
+              },
+              yTtft: {
+                type: "linear",
+                position: "left",
+                title: { display: true, text: "TTFT p50" },
+                beginAtZero: true,
+                ticks: {
+                  callback: (v) => fmtTtft(v)
+                },
+                grid: { color: "rgba(127,127,127,0.15)" }
+              },
+              yTps: {
+                type: "linear",
+                position: "right",
+                title: { display: true, text: "Tok/s" },
+                beginAtZero: true,
+                ticks: {
+                  callback: (v) => (v == null ? "" : Number(v).toFixed(0))
+                },
+                grid: { drawOnChartArea: false }
+              }
+            }
+          }
+        });
+      })();
+    </script>
   HTML
 end
 
