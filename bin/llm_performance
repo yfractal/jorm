@@ -315,14 +315,12 @@ def build_per_model(rows)
 
   by_model.map do |model, model_rows|
     ttfts = model_rows.filter_map { |r| r["ttft_ms"] }
-    durations = model_rows.filter_map { |r| r["duration_ms"] }
     tps = model_rows.filter_map { |r| r["tokens_per_sec"] }
     errors = model_rows.count { |r| r["is_error"] }
     {
       "model" => model,
       "requests" => model_rows.size,
       "ttft_p50" => percentile(ttfts, 50),
-      "duration_p50" => percentile(durations, 50),
       "tokens_per_sec_avg" => tps.empty? ? nil : (tps.sum / tps.size.to_f),
       "error_rate" => model_rows.empty? ? 0.0 : (100.0 * errors / model_rows.size),
       "input_tokens" => model_rows.sum { |r| r["input_tokens"] },
@@ -330,7 +328,55 @@ def build_per_model(rows)
       "cache_read_tokens" => model_rows.sum { |r| r["cache_read_tokens"] },
       "reasoning_tokens" => model_rows.sum { |r| r["reasoning_tokens"] }
     }
-  end.sort_by { |m| -m["requests"] }
+  end
+end
+
+MODEL_SORT_COLUMNS = {
+  "model" => { label: "Name", numeric: false },
+  "ttft_p50" => { label: "TTFT p50", numeric: true },
+  "tokens_per_sec_avg" => { label: "Tok/s", numeric: true },
+  "error_rate" => { label: "Error %", numeric: true },
+  "requests" => { label: "Reqs", numeric: true },
+  "input_tokens" => { label: "Input", numeric: true },
+  "output_tokens" => { label: "Output", numeric: true },
+  "cache_read_tokens" => { label: "Cached", numeric: true },
+  "reasoning_tokens" => { label: "Reasoning", numeric: true }
+}.freeze
+
+MODEL_COLUMN_ORDER = %w[
+  model ttft_p50 tokens_per_sec_avg error_rate
+  requests input_tokens output_tokens cache_read_tokens reasoning_tokens
+].freeze
+
+DEFAULT_MODEL_SORT = "requests"
+DEFAULT_MODEL_DIR = "desc"
+
+def normalize_model_sort(sort_raw, dir_raw)
+  sort = MODEL_SORT_COLUMNS.key?(sort_raw.to_s) ? sort_raw.to_s : DEFAULT_MODEL_SORT
+  dir = %w[asc desc].include?(dir_raw.to_s) ? dir_raw.to_s : DEFAULT_MODEL_DIR
+  [sort, dir]
+end
+
+def sort_models(models, sort_key, dir)
+  numeric = MODEL_SORT_COLUMNS.fetch(sort_key)[:numeric]
+  models.sort do |a, b|
+    av = a[sort_key]
+    bv = b[sort_key]
+    if av.nil? && bv.nil?
+      0
+    elsif av.nil?
+      1
+    elsif bv.nil?
+      -1
+    else
+      cmp = if numeric
+              av.to_f <=> bv.to_f
+            else
+              av.to_s.downcase <=> bv.to_s.downcase
+            end
+      dir == "desc" ? -cmp : cmp
+    end
+  end
 end
 
 def build_error_breakdown(rows)
@@ -734,6 +780,17 @@ PAGE_CSS = <<~CSS
     color: #666;
     border-bottom: 2px solid rgba(127, 127, 127, 0.3);
   }
+  thead th.sortable { padding: 0; }
+  thead th.sortable a {
+    display: block;
+    padding: 0.55rem 0.6rem;
+    color: inherit;
+    text-decoration: none;
+  }
+  thead th.sortable a:hover { color: #2563eb; background: rgba(37, 99, 235, 0.06); }
+  thead th.sortable.sorted a { color: #2563eb; }
+  thead th.sortable .sort-indicator { margin-left: 0.25rem; opacity: 0.75; }
+  thead th.num.sortable a { text-align: right; }
   tbody tr td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); }
   tbody tr:hover td { background: rgba(127, 127, 127, 0.06); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
@@ -763,9 +820,18 @@ CSS
 
 def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failures:,
                 range_preset:, from_raw:, to_raw:, from_time:, to_time:, model_filter:,
-                available_models:, error: nil)
+                available_models:, sort_key:, sort_dir:, error: nil)
   filters_active = !model_filter.to_s.empty? || !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
                    (range_preset && range_preset != DEFAULT_RANGE)
+
+  base_params = {
+    range: range_preset,
+    from: from_raw,
+    to: to_raw,
+    model: model_filter,
+    sort: sort_key,
+    dir: sort_dir
+  }
 
   body_html =
     if error
@@ -778,13 +844,17 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
         buckets_info: buckets_info,
         models: models,
         error_breakdown: error_breakdown,
-        failures: failures
+        failures: failures,
+        base_params: base_params,
+        sort_key: sort_key,
+        sort_dir: sort_dir
       )
     end
 
   preset_links = RANGE_PRESETS.keys.map do |key|
     cls = (range_preset == key && from_raw.to_s.empty? && to_raw.to_s.empty?) ? "active" : ""
-    %(<a class="#{cls}" href="/#{h(query_string(range: key, model: model_filter))}">#{key}</a>)
+    href = query_string(base_params.merge(range: key, from: nil, to: nil))
+    %(<a class="#{cls}" href="/#{h(href)}">#{key}</a>)
   end.join
 
   model_options = [%(<option value="">All models</option>)] +
@@ -829,6 +899,8 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
           <select id="model" name="model">#{model_options.join}</select>
         </div>
         <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
+        <input type="hidden" name="sort" value="#{h(sort_key)}">
+        <input type="hidden" name="dir" value="#{h(sort_dir)}">
         <div class="field field-actions">
           <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
@@ -843,7 +915,8 @@ def render_page(rows:, summary:, buckets_info:, models:, error_breakdown:, failu
   HTML
 end
 
-def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failures:)
+def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failures:,
+                     base_params:, sort_key:, sort_dir:)
   buckets = buckets_info["buckets"]
 
   traffic_svg = svg_bar_chart(buckets, value_key: "requests", error_key: "errors")
@@ -908,6 +981,12 @@ def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failure
     </section>
 
     <div class="grid">
+      <section class="panel panel-full">
+        <h2>Per model</h2>
+        <p class="panel-hint">Click a column header to sort</p>
+        #{render_model_table(models, base_params: base_params, sort_key: sort_key, sort_dir: sort_dir)}
+      </section>
+
       <section class="panel">
         <h2>Traffic</h2>
         <p class="panel-hint">Requests per bucket · red = errors</p>
@@ -950,11 +1029,6 @@ def render_dashboard(summary:, buckets_info:, models:, error_breakdown:, failure
       <section class="panel">
         <h2>Recent failures &amp; retries</h2>
         #{render_failures(failures)}
-      </section>
-
-      <section class="panel panel-full">
-        <h2>Per model</h2>
-        #{render_model_table(models)}
       </section>
     </div>
   HTML
@@ -1011,18 +1085,42 @@ def render_failures(rows)
   HTML
 end
 
-def render_model_table(models)
+def render_model_table(models, base_params:, sort_key:, sort_dir:)
   return %(<p class="muted">No model data.</p>) if models.empty?
+
+  headers = MODEL_COLUMN_ORDER.map do |key|
+    meta = MODEL_SORT_COLUMNS.fetch(key)
+    next_dir = if key == sort_key
+                 sort_dir == "asc" ? "desc" : "asc"
+               else
+                 meta[:numeric] ? "desc" : "asc"
+               end
+    href = query_string(base_params.merge(sort: key, dir: next_dir))
+    sorted = key == sort_key
+    indicator = if sorted
+                  sort_dir == "asc" ? "↑" : "↓"
+                else
+                  ""
+                end
+    classes = ["sortable"]
+    classes << "num" if meta[:numeric]
+    classes << "sorted" if sorted
+    aria = sorted ? %( aria-sort="#{sort_dir == "asc" ? "ascending" : "descending"}") : ""
+    <<~HTML.strip
+      <th class="#{classes.join(" ")}"#{aria}>
+        <a href="/#{h(href)}" title="Sort by #{h(meta[:label])}">#{h(meta[:label])}<span class="sort-indicator">#{indicator}</span></a>
+      </th>
+    HTML
+  end.join
 
   body = models.map do |m|
     <<~HTML
       <tr>
         <td class="mono">#{h(m["model"])}</td>
-        <td class="num">#{m["requests"]}</td>
         <td class="num">#{h(format_ms(m["ttft_p50"]))}</td>
-        <td class="num">#{h(format_ms(m["duration_p50"]))}</td>
         <td class="num">#{h(format_tps(m["tokens_per_sec_avg"]))}</td>
         <td class="num">#{h(format_rate(m["error_rate"]))}</td>
+        <td class="num">#{m["requests"]}</td>
         <td class="num">#{format_int(m["input_tokens"])}</td>
         <td class="num">#{format_int(m["output_tokens"])}</td>
         <td class="num">#{format_int(m["cache_read_tokens"])}</td>
@@ -1034,18 +1132,7 @@ def render_model_table(models)
   <<~HTML
     <table>
       <thead>
-        <tr>
-          <th>Model</th>
-          <th class="num">Reqs</th>
-          <th class="num">TTFT p50</th>
-          <th class="num">Latency p50</th>
-          <th class="num">Tok/s</th>
-          <th class="num">Error %</th>
-          <th class="num">Input</th>
-          <th class="num">Output</th>
-          <th class="num">Cached</th>
-          <th class="num">Reasoning</th>
-        </tr>
+        <tr>#{headers}</tr>
       </thead>
       <tbody>#{body}</tbody>
     </table>
@@ -1093,6 +1180,7 @@ server.mount_proc "/" do |req, res|
   from_raw = req.query["from"].to_s
   to_raw = req.query["to"].to_s
   model_filter = req.query["model"].to_s
+  sort_key, sort_dir = normalize_model_sort(req.query["sort"], req.query["dir"])
 
   from_time, to_time, effective_preset = resolve_range(
     preset: range_preset,
@@ -1116,7 +1204,7 @@ server.mount_proc "/" do |req, res|
 
   summary = build_summary(rows)
   buckets_info = build_buckets(rows, from_time, to_time)
-  models = build_per_model(rows)
+  models = sort_models(build_per_model(rows), sort_key, sort_dir)
   error_breakdown = build_error_breakdown(rows)
   failures = recent_failures(rows)
 
@@ -1136,6 +1224,8 @@ server.mount_proc "/" do |req, res|
     to_time: to_time,
     model_filter: model_filter,
     available_models: all_models,
+    sort_key: sort_key,
+    sort_dir: sort_dir,
     error: error
   )
 end
