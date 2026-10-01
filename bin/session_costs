@@ -88,16 +88,17 @@ def format_ts(ms_or_time)
   return "—" if ms_or_time.nil?
 
   t = case ms_or_time
-      when Integer then Time.at(ms_or_time / 1000.0).utc
-      when Time then ms_or_time.utc
+      when Integer then Time.at(ms_or_time / 1000.0)
+      when Time then ms_or_time
       else
         begin
-          Time.parse(ms_or_time.to_s).utc
+          Time.parse(ms_or_time.to_s)
         rescue ArgumentError
           return ms_or_time.to_s
         end
       end
-  t.strftime("%Y-%m-%d %H:%M:%S UTC")
+  t = t.getlocal
+  t.strftime("%Y-%m-%d %H:%M:%S %Z")
 end
 
 def format_cost(cost)
