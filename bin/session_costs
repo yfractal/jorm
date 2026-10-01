@@ -1013,7 +1013,7 @@ def human_input_chip(inputs)
   return "" if inputs.nil? || inputs.empty?
 
   inputs.map do |input|
-    label = truncate(input["text"], 48)
+    label = truncate(input["text"], 20)
     %(<span class="human-input-chip" title="#{h(input["text"])}">#{h(label)}</span>)
   end.join
 end
