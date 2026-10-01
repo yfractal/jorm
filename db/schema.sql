@@ -52,5 +52,14 @@ CREATE TABLE IF NOT EXISTS responses (
   "duration_ms" FLOAT64,       -- ms from request start to response complete
   "retry_count" INT16,         -- upstream retries performed before this response
   "error" STRING,              -- transport / HTTP / mid-stream error message, if any
+  -- Denormalized for bin/llm_performance so it can avoid JOINing requests
+  -- and shipping full body payloads just to read model / usage / effort.
+  "model" STRING,
+  "think_effort" STRING,
+  "input_tokens" INT64,
+  "output_tokens" INT64,
+  "cache_read_tokens" INT64,
+  "cache_creation_tokens" INT64,
+  "reasoning_tokens" INT64,
   PRIMARY KEY ("id")
 );

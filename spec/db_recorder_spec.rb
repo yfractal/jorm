@@ -244,6 +244,40 @@ RSpec.describe Jorm::DbRecorder do
       params = capture_response_params(req, ["boom"], upstream_result)
       expect(params[8]).to eq("http_500")
     end
+
+    it "denormalizes model, think effort, and token counts for the performance report" do
+      req = build_req(
+        "rack.input" => StringIO.new(
+          '{"model":"req-model","thinking":{"type":"enabled","budget_tokens":2048}}'
+        )
+      )
+      upstream_result = result(
+        status: 200,
+        headers: { "content-type" => "application/json" }
+      )
+      body = {
+        "model" => "resp-model",
+        "usage" => {
+          "input_tokens" => 100,
+          "output_tokens" => 50,
+          "cache_read_input_tokens" => 10,
+          "cache_creation_input_tokens" => 5,
+          "output_tokens_details" => { "thinking_tokens" => 12 }
+        }
+      }
+
+      params = capture_response_params(req, [JSON.generate(body)], upstream_result)
+      model, think_effort, input_tokens, output_tokens,
+        cache_read_tokens, cache_creation_tokens, reasoning_tokens = params[9, 7]
+
+      expect(model).to eq("resp-model")
+      expect(think_effort).to eq("budget:2048")
+      expect(input_tokens).to eq(100)
+      expect(output_tokens).to eq(50)
+      expect(cache_read_tokens).to eq(10)
+      expect(cache_creation_tokens).to eq(5)
+      expect(reasoning_tokens).to eq(12)
+    end
   end
 
   describe "when disabled" do

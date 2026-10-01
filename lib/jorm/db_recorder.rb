@@ -24,8 +24,9 @@ module Jorm
   # which the responses row shares.
   #
   # Timing / retry / error columns (ttft_ms, duration_ms, retry_count,
-  # error) are derived from the +timing+ keyword and the upstream Result
-  # so the performance report page can query them without joining.
+  # error) plus performance metrics (model, think_effort, token counts)
+  # are derived at write time so the performance report page can query
+  # responses alone -- no JOIN to requests, no full body payloads.
   class DbRecorder
     INSERT_REQUEST_SQL = <<~SQL.freeze
       INSERT INTO requests
@@ -36,8 +37,11 @@ module Jorm
     INSERT_RESPONSE_SQL = <<~SQL.freeze
       INSERT INTO responses
         ("id", "jorm_request_id", "status", "headers", "body",
-         "ttft_ms", "duration_ms", "retry_count", "error")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         "ttft_ms", "duration_ms", "retry_count", "error",
+         "model", "think_effort", "input_tokens", "output_tokens",
+         "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+              $10, $11, $12, $13, $14, $15, $16)
     SQL
 
     # Marker substring present in Anthropic-compatible SSE chunks that
@@ -121,12 +125,20 @@ module Jorm
         content_type: headers["content-type"],
         chunks: chunks
       )
+      metrics = PerformanceMetrics.extract(
+        req_body: req.body.to_s,
+        resp_body: parsed_body
+      )
 
       @writer.enqueue do
         @connection.exec_params(
           INSERT_RESPONSE_SQL,
           [id, jorm_request_id, status, redacted_headers, body,
-           ttft_ms, duration_ms, retry_count, error]
+           ttft_ms, duration_ms, retry_count, error,
+           metrics[:model], metrics[:think_effort],
+           metrics[:input_tokens], metrics[:output_tokens],
+           metrics[:cache_read_tokens], metrics[:cache_creation_tokens],
+           metrics[:reasoning_tokens]]
         )
       end
     end

@@ -49,7 +49,14 @@ RESPONSE_COLUMN_ADDITIONS = [
   ["ttft_ms", "FLOAT64"],
   ["duration_ms", "FLOAT64"],
   ["retry_count", "INT16"],
-  ["error", "STRING"]
+  ["error", "STRING"],
+  ["model", "STRING"],
+  ["think_effort", "STRING"],
+  ["input_tokens", "INT64"],
+  ["output_tokens", "INT64"],
+  ["cache_read_tokens", "INT64"],
+  ["cache_creation_tokens", "INT64"],
+  ["reasoning_tokens", "INT64"]
 ].freeze
 
 def existing_columns(conn, table)

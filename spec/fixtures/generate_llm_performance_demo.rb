@@ -100,30 +100,17 @@ rows = []
     retries = 1
   end
 
-  req_body = {
-    "model" => model["name"],
-    "messages" => [{ "role" => "user", "content" => "demo prompt #{i}" }],
-    "max_tokens" => 1024
-  }.merge(effort)
-
-  resp_body =
-    if status == 200
-      {
-        "id" => "demo-msg-#{i}",
-        "type" => "message",
-        "role" => "assistant",
-        "model" => model["name"],
-        "content" => [{ "type" => "text", "text" => "demo reply #{i}" }],
-        "usage" => {
-          "input_tokens" => input_tokens,
-          "output_tokens" => output_tokens,
-          "cache_read_input_tokens" => cache_read,
-          "cache_creation_input_tokens" => cache_creation,
-          "output_tokens_details" => { "thinking_tokens" => thinking_tokens }
-        }
-      }
+  think_effort =
+    if effort.key?("reasoning_effort")
+      effort["reasoning_effort"].to_s
+    elsif effort.dig("thinking", "type") == "disabled"
+      "disabled"
+    elsif effort.dig("thinking", "budget_tokens")
+      "budget:#{effort.dig("thinking", "budget_tokens")}"
+    elsif effort.dig("thinking", "type")
+      effort.dig("thinking", "type").to_s
     else
-      { "error" => { "message" => error } }
+      "(none)"
     end
 
   rows << {
@@ -133,8 +120,13 @@ rows = []
     "duration_ms" => duration,
     "retry_count" => retries,
     "error" => error,
-    "body" => resp_body,
-    "req_body" => req_body
+    "model" => model["name"],
+    "think_effort" => think_effort,
+    "input_tokens" => status == 200 ? input_tokens : 0,
+    "output_tokens" => output_tokens,
+    "cache_read_tokens" => status == 200 ? cache_read : 0,
+    "cache_creation_tokens" => status == 200 ? cache_creation : 0,
+    "reasoning_tokens" => thinking_tokens
   }
 end
 

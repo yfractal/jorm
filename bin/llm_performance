@@ -8,10 +8,11 @@
 # Reads from GreptimeDB's HTTP SQL API (default :4000) -- no `pg` gem
 # needed, only Ruby stdlib + WEBrick.
 #
-# Timing / retry columns (ttft_ms, duration_ms, retry_count, error) are
-# written by the proxy starting with the capture change; older rows leave
-# those as NULL and are excluded from latency stats. Token counts and
-# model come from the reassembled response body.
+# Timing / retry / metric columns (ttft_ms, duration_ms, retry_count, error,
+# model, think_effort, token counts) are written by the proxy onto the
+# responses row so this report can SELECT lightweight columns only -- no
+# JOIN to requests and no full body payloads. Older rows that predate those
+# columns leave them NULL and are excluded from the corresponding stats.
 #
 # Usage:
 #   bin/llm_performance
@@ -138,17 +139,17 @@ def fetch_rows(from_time:, to_time:)
   return fetch_demo_rows(from_time: from_time, to_time: to_time) if DEMO_MODE
 
   clauses = ["1 = 1"]
-  clauses << "resp.created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
-  clauses << "resp.created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+  clauses << "created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
+  clauses << "created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
 
   sql = <<~SQL
-    SELECT resp.created_at, resp.status, resp.ttft_ms, resp.duration_ms,
-           resp.retry_count, resp.error, resp.body,
-           r.body AS req_body
-    FROM responses resp
-    LEFT JOIN requests r ON r.jorm_request_id = resp.jorm_request_id
+    SELECT created_at, status, ttft_ms, duration_ms,
+           retry_count, error, model, think_effort,
+           input_tokens, output_tokens, cache_read_tokens,
+           cache_creation_tokens, reasoning_tokens
+    FROM responses
     WHERE #{clauses.join(" AND ")}
-    ORDER BY resp.created_at ASC
+    ORDER BY created_at ASC
   SQL
 
   sql_query(sql)
@@ -167,6 +168,7 @@ def fetch_demo_rows(from_time:, to_time:)
     next if from_time && created_at < from_time
     next if to_time && created_at > to_time
 
+    metrics = demo_row_metrics(row)
     {
       "created_at" => created_at,
       "status" => row["status"],
@@ -174,14 +176,54 @@ def fetch_demo_rows(from_time:, to_time:)
       "duration_ms" => row["duration_ms"],
       "retry_count" => row["retry_count"],
       "error" => row["error"],
-      "body" => row["body"].is_a?(String) ? row["body"] : JSON.generate(row["body"]),
-      "req_body" => row["req_body"].is_a?(String) ? row["req_body"] : JSON.generate(row["req_body"])
+      "model" => metrics[:model],
+      "think_effort" => metrics[:think_effort],
+      "input_tokens" => metrics[:input_tokens],
+      "output_tokens" => metrics[:output_tokens],
+      "cache_read_tokens" => metrics[:cache_read_tokens],
+      "cache_creation_tokens" => metrics[:cache_creation_tokens],
+      "reasoning_tokens" => metrics[:reasoning_tokens]
     }
   end.sort_by { |r| r["created_at"] }
 end
 
+# Prefer denormalized columns when the fixture has them; otherwise derive
+# from body / req_body the same way the proxy does at write time.
+def demo_row_metrics(row)
+  if row.key?("model") || row.key?("input_tokens")
+    return {
+      model: row["model"].to_s,
+      think_effort: row["think_effort"] || "(none)",
+      input_tokens: to_i_or_zero(row["input_tokens"]),
+      output_tokens: to_i_or_zero(row["output_tokens"]),
+      cache_read_tokens: to_i_or_zero(row["cache_read_tokens"]),
+      cache_creation_tokens: to_i_or_zero(row["cache_creation_tokens"]),
+      reasoning_tokens: to_i_or_zero(row["reasoning_tokens"])
+    }
+  end
+
+  body = parse_json_maybe(row["body"].is_a?(String) ? row["body"] : JSON.generate(row["body"]))
+  req = parse_json_maybe(row["req_body"].is_a?(String) ? row["req_body"] : JSON.generate(row["req_body"]))
+  usage = body.is_a?(Hash) ? body["usage"] : nil
+  usage = {} unless usage.is_a?(Hash)
+  details = usage["output_tokens_details"]
+
+  model = body.is_a?(Hash) ? body["model"].to_s : ""
+  model = req["model"].to_s if model.empty? && req.is_a?(Hash)
+
+  {
+    model: model,
+    think_effort: extract_think_effort(req),
+    input_tokens: to_i_or_zero(usage["input_tokens"]),
+    output_tokens: to_i_or_zero(usage["output_tokens"]),
+    cache_read_tokens: to_i_or_zero(usage["cache_read_input_tokens"]),
+    cache_creation_tokens: to_i_or_zero(usage["cache_creation_input_tokens"]),
+    reasoning_tokens: details.is_a?(Hash) ? to_i_or_zero(details["thinking_tokens"]) : 0
+  }
+end
+
 def extract_think_effort(req_body)
-  body = parse_json_maybe(req_body)
+  body = req_body.is_a?(Hash) ? req_body : parse_json_maybe(req_body)
   return "(none)" unless body.is_a?(Hash)
 
   if (effort = body["reasoning_effort"])
@@ -215,17 +257,6 @@ def extract_think_effort(req_body)
 end
 
 def normalize_row(row)
-  body = parse_json_maybe(row["body"])
-  usage = body.is_a?(Hash) ? body["usage"] : nil
-  usage = {} unless usage.is_a?(Hash)
-
-  input = to_i_or_zero(usage["input_tokens"])
-  output = to_i_or_zero(usage["output_tokens"])
-  cache_read = to_i_or_zero(usage["cache_read_input_tokens"])
-  cache_creation = to_i_or_zero(usage["cache_creation_input_tokens"])
-  details = usage["output_tokens_details"]
-  reasoning = details.is_a?(Hash) ? to_i_or_zero(details["thinking_tokens"]) : 0
-
   status = to_i_or_zero(row["status"])
   error = row["error"]
   error = nil if error.respond_to?(:empty?) && error.empty?
@@ -233,13 +264,8 @@ def normalize_row(row)
 
   ttft_ms = to_f_or_nil(row["ttft_ms"])
   duration_ms = to_f_or_nil(row["duration_ms"])
+  output = to_i_or_zero(row["output_tokens"])
   tokens_per_sec = compute_tokens_per_sec(output, duration_ms, ttft_ms)
-
-  model = body.is_a?(Hash) ? body["model"].to_s : ""
-  if model.empty?
-    req = parse_json_maybe(row["req_body"])
-    model = req["model"].to_s if req.is_a?(Hash)
-  end
 
   {
     "created_at" => to_time(row["created_at"]),
@@ -249,13 +275,13 @@ def normalize_row(row)
     "retry_count" => to_i_or_zero(row["retry_count"]),
     "error" => error,
     "is_error" => is_error,
-    "model" => model,
-    "think_effort" => extract_think_effort(row["req_body"]),
-    "input_tokens" => input,
+    "model" => row["model"].to_s,
+    "think_effort" => (row["think_effort"].to_s.empty? ? "(none)" : row["think_effort"].to_s),
+    "input_tokens" => to_i_or_zero(row["input_tokens"]),
     "output_tokens" => output,
-    "cache_read_tokens" => cache_read,
-    "cache_creation_tokens" => cache_creation,
-    "reasoning_tokens" => reasoning,
+    "cache_read_tokens" => to_i_or_zero(row["cache_read_tokens"]),
+    "cache_creation_tokens" => to_i_or_zero(row["cache_creation_tokens"]),
+    "reasoning_tokens" => to_i_or_zero(row["reasoning_tokens"]),
     "tokens_per_sec" => tokens_per_sec
   }
 end
@@ -1269,7 +1295,7 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:,
           #{if DEMO_MODE
               "Demo mode — serving synthetic data from <code>#{h(DEMO_FIXTURE.basename)}</code>."
             else
-              "Timing columns require a recent proxy; older rows still contribute token and error stats."
+              "Metric columns require a recent proxy; older rows may lack model/token stats."
             end}
         </p>
       </header>
