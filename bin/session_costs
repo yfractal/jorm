@@ -127,18 +127,23 @@ def format_pct(ratio)
   format("%.0f%%", ratio * 100)
 end
 
-# Anthropic: input_tokens is uncached only. Hit rate =
-# cache_read / (input + cache_creation + cache_read).
-def cache_hit_rate(input_tokens:, cache_read_tokens:, cache_creation_tokens:)
+# Anthropic/OpenRouter: input_tokens is uncached only. Total prompt =
+# input + cache_creation + cache_read. Hit rate = cache_read / total.
+def total_prompt_tokens(input_tokens:, cache_read_tokens:, cache_creation_tokens:)
   return nil if input_tokens.nil? && cache_read_tokens.nil? && cache_creation_tokens.nil?
 
-  input = input_tokens.to_i
-  cache_read = cache_read_tokens.to_i
-  cache_creation = cache_creation_tokens.to_i
-  total = input + cache_read + cache_creation
-  return nil if total <= 0
+  input_tokens.to_i + cache_read_tokens.to_i + cache_creation_tokens.to_i
+end
 
-  cache_read.to_f / total
+def cache_hit_rate(input_tokens:, cache_read_tokens:, cache_creation_tokens:)
+  total = total_prompt_tokens(
+    input_tokens: input_tokens,
+    cache_read_tokens: cache_read_tokens,
+    cache_creation_tokens: cache_creation_tokens
+  )
+  return nil if total.nil? || total <= 0
+
+  cache_read_tokens.to_i.to_f / total
 end
 
 # Tokenizer-free size estimate used for per-section chips. Not exact API
@@ -272,13 +277,18 @@ def extract_usage_tokens(resp_body)
     }
   end
 
+  # JSON null → 0 when the key is present (OpenRouter often sends null).
+  read_token = lambda do |key|
+    return nil unless usage.key?(key)
+
+    to_i_or_nil(usage[key]) || 0
+  end
+
   {
-    "input_tokens" => usage.key?("input_tokens") ? to_i_or_nil(usage["input_tokens"]) : nil,
-    "output_tokens" => usage.key?("output_tokens") ? to_i_or_nil(usage["output_tokens"]) : nil,
-    "cache_read_tokens" =>
-      usage.key?("cache_read_input_tokens") ? to_i_or_nil(usage["cache_read_input_tokens"]) : nil,
-    "cache_creation_tokens" =>
-      usage.key?("cache_creation_input_tokens") ? to_i_or_nil(usage["cache_creation_input_tokens"]) : nil
+    "input_tokens" => read_token.call("input_tokens"),
+    "output_tokens" => read_token.call("output_tokens"),
+    "cache_read_tokens" => read_token.call("cache_read_input_tokens"),
+    "cache_creation_tokens" => read_token.call("cache_creation_input_tokens")
   }
 end
 
@@ -402,6 +412,11 @@ def build_session_detail(session_id, rows)
       cache_read_tokens: tokens["cache_read_tokens"],
       cache_creation_tokens: tokens["cache_creation_tokens"]
     )
+    prompt_tokens = total_prompt_tokens(
+      input_tokens: tokens["input_tokens"],
+      cache_read_tokens: tokens["cache_read_tokens"],
+      cache_creation_tokens: tokens["cache_creation_tokens"]
+    )
 
     {
       "index" => index,
@@ -420,6 +435,7 @@ def build_session_detail(session_id, rows)
       "output_tokens" => tokens["output_tokens"],
       "cache_read_tokens" => tokens["cache_read_tokens"],
       "cache_creation_tokens" => tokens["cache_creation_tokens"],
+      "prompt_tokens" => prompt_tokens,
       "cache_hit_rate" => hit_rate,
       "ttft_ms" => to_f_or_nil(row["ttft_ms"]),
       "duration_ms" => to_f_or_nil(row["duration_ms"]),
@@ -612,17 +628,22 @@ def tokens_class(count)
   count.nil? ? "cost-unknown" : ""
 end
 
-def pct_class(ratio)
-  ratio.nil? ? "cost-unknown" : ""
-end
-
 def cache_hit_title(req)
   rate = req["cache_hit_rate"]
   return "No usage data" if rate.nil?
 
   cache_read = req["cache_read_tokens"].to_i
-  total = req["input_tokens"].to_i + cache_read + req["cache_creation_tokens"].to_i
+  total = req["prompt_tokens"] || (
+    req["input_tokens"].to_i + cache_read + req["cache_creation_tokens"].to_i
+  )
   "#{format_tokens(cache_read)} / #{format_tokens(total)} tokens from cache"
+end
+
+def cache_hit_chip(req)
+  rate = req["cache_hit_rate"]
+  return "" if rate.nil?
+
+  %(<span class="cache-hit-chip" title="#{h(cache_hit_title(req))}">cache hit #{h(format_pct(rate))}</span>)
 end
 
 def short_session_id(session_id)
@@ -1243,9 +1264,11 @@ def render_request_card(req, open_details:)
   model = req["model"].to_s.empty? ? "—" : req["model"]
   req_index = req["index"]
   body = req["req_body"]
+  # Prefer total prompt tokens (uncached + cache write + cache read).
+  # Anthropic's input_tokens alone understates the request when cache hits.
   req_tok =
-    if req["input_tokens"]
-      token_chip(req["input_tokens"], estimated: false)
+    if req["prompt_tokens"]
+      token_chip(req["prompt_tokens"], estimated: false)
     else
       token_chip(estimate_tokens(body))
     end
@@ -1267,35 +1290,8 @@ def render_request_card(req, open_details:)
         #{status_pill(req)}
       </header>
 
-      <div class="metrics" aria-label="Request metrics">
-        <div class="metric">
-          <span class="metric-label">Cost</span>
-          <span class="metric-value #{cost_class(req["cost"])}">#{h(format_cost(req["cost"]))}</span>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Latency</span>
-          <span class="metric-value #{ms_class(req["duration_ms"])}">#{h(format_ms(req["duration_ms"]))}</span>
-        </div>
-        <div class="metric">
-          <span class="metric-label">TTFT</span>
-          <span class="metric-value #{ms_class(req["ttft_ms"])}">#{h(format_ms(req["ttft_ms"]))}</span>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Input tokens</span>
-          <span class="metric-value #{tokens_class(req["input_tokens"])}">#{h(format_tokens(req["input_tokens"]))}</span>
-        </div>
-        <div class="metric">
-          <span class="metric-label">Output tokens</span>
-          <span class="metric-value #{tokens_class(req["output_tokens"])}">#{h(format_tokens(req["output_tokens"]))}</span>
-        </div>
-        <div class="metric" title="#{h(cache_hit_title(req))}">
-          <span class="metric-label">Cache hit</span>
-          <span class="metric-value #{pct_class(req["cache_hit_rate"])}">#{h(format_pct(req["cache_hit_rate"]))}</span>
-        </div>
-      </div>
-
       <details class="section-details request-section"#{open_attr}>
-        <summary>Request #{req_tok}</summary>
+        <summary>Request #{req_tok}#{cache_hit_chip(req)}</summary>
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
 
@@ -1798,7 +1794,7 @@ PAGE_CSS = <<~CSS
 
   .metrics {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.5rem;
     margin-bottom: 0.85rem;
   }
@@ -1982,6 +1978,22 @@ PAGE_CSS = <<~CSS
     line-height: 1.3;
   }
   .token-chip-est { color: #666; }
+  .cache-hit-chip {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.35rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: #555;
+    background: rgba(127, 127, 127, 0.12);
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 999px;
+    padding: 0.1rem 0.45rem;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
   .block-header .token-chip,
   .tools-panel-header .token-chip,
   .history-chip-label .token-chip,
@@ -1989,6 +2001,7 @@ PAGE_CSS = <<~CSS
   @media (prefers-color-scheme: dark) {
     .token-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
     .token-chip-est { color: #bbb; }
+    .cache-hit-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
   }
 
   .history-chip {
