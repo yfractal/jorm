@@ -134,27 +134,6 @@ def resolve_range(preset:, from_raw:, to_raw:)
   [Time.now.utc - seconds, Time.now.utc, preset]
 end
 
-# Metrics-chart window from drag-zoom (m_from / m_to). Falls back to the
-# page range when unset.
-def resolve_metrics_range(from_raw:, to_raw:, page_from:, page_to:)
-  from_time = parse_time_param(from_raw)
-  to_time = parse_time_param(to_raw)
-  return [page_from, page_to] unless from_time || to_time
-
-  [from_time || page_from, to_time || page_to]
-end
-
-def filter_rows_by_time(rows, from_time, to_time)
-  rows.select do |row|
-    t = row["created_at"]
-    next false unless t
-    next false if from_time && t < from_time
-    next false if to_time && t > to_time
-
-    true
-  end
-end
-
 def fetch_rows(from_time:, to_time:)
   return fetch_demo_rows(from_time: from_time, to_time: to_time) if DEMO_MODE
 
@@ -442,10 +421,29 @@ def build_per_model_timeseries(rows, from_time, to_time)
   {
     "bucket_seconds" => bucket_seconds,
     "labels" => keys.map { |t| format_bucket_label(t, bucket_seconds) },
-    "timestamps" => keys.map { |t| t.getlocal.strftime("%Y-%m-%dT%H:%M") },
-    "timestamp_ends" => keys.map { |t| (t + bucket_seconds).getlocal.strftime("%Y-%m-%dT%H:%M") },
+    "timestamps" => keys.map { |t| datetime_local_value(t) },
+    "timestamp_ends" => keys.map { |t| datetime_local_value(t + bucket_seconds) },
     "series" => series
   }
+end
+
+def bucket_brush_times(buckets, bucket_seconds)
+  {
+    "timestamps" => buckets.map { |b| datetime_local_value(b["t"]) },
+    "timestamp_ends" => buckets.map { |b| datetime_local_value(b["t"] + bucket_seconds) }
+  }
+end
+
+def wrap_brushable(chart_html, timestamps:, timestamp_ends:)
+  return chart_html if timestamps.nil? || timestamps.empty?
+
+  payload = JSON.generate("timestamps" => timestamps, "timestampEnds" => timestamp_ends)
+  <<~HTML
+    <div class="chart-brush" data-brush="#{h(payload)}">
+      <div class="brush-rect" aria-hidden="true"></div>
+      #{chart_html}
+    </div>
+  HTML
 end
 
 def build_summary(rows)
@@ -968,16 +966,32 @@ PAGE_CSS = <<~CSS
   }
   .chart-wrap:last-child { margin-bottom: 0.5rem; }
   .chart-wrap canvas { width: 100% !important; height: 100% !important; }
-  .metrics-zoom-hint {
+  .chart-brush {
+    position: relative;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .chart-brush .brush-rect {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: none;
+    background: rgba(37, 99, 235, 0.15);
+    border: 1px solid rgba(37, 99, 235, 0.55);
+    pointer-events: none;
+    z-index: 2;
+  }
+  .zoom-hint {
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem;
     align-items: center;
     font-size: 0.82rem;
     color: #666;
-    margin: 0 0 0.75rem;
+    margin: 0 0 0.85rem;
   }
-  .metrics-zoom-hint strong { color: inherit; font-weight: 600; }
+  .zoom-hint strong { color: inherit; font-weight: 600; }
   .chart-title {
     font-size: 1.05rem;
     font-weight: 700;
@@ -1024,8 +1038,16 @@ PAGE_CSS = <<~CSS
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
   }
   tbody tr.model-row .model-toggle:hover { color: #2563eb; }
+  tbody tr.effort-row[hidden] { display: none; }
   tbody tr.model-row .toggle-marker {
     display: inline-block;
     width: 0.85em;
@@ -1066,14 +1088,116 @@ PAGE_CSS = <<~CSS
   .state-hint { color: #666; font-size: 0.88rem; margin: 0 0 1rem; }
 CSS
 
-def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_model:,
+BRUSH_AND_TOGGLE_JS = <<~JS
+  (function () {
+    const paramsEl = document.getElementById("jorm-page-params");
+    const pageParams = paramsEl ? JSON.parse(paramsEl.textContent || "{}") : {};
+
+    const navigateTimeRange = (from, to) => {
+      const params = new URLSearchParams();
+      Object.entries(pageParams || {}).forEach(([k, v]) => {
+        if (v != null && v !== "") params.set(k, v);
+      });
+      if (from && to) {
+        params.set("from", from);
+        params.set("to", to);
+      } else {
+        params.delete("from");
+        params.delete("to");
+      }
+      const qs = params.toString();
+      window.location.search = qs ? ("?" + qs) : "";
+    };
+
+    const resetTimeRange = () => navigateTimeRange(null, null);
+    window.jormNavigateTimeRange = navigateTimeRange;
+    window.jormResetTimeRange = resetTimeRange;
+
+    const indexFromClientX = (el, clientX, count) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || count <= 0) return 0;
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return Math.min(count - 1, Math.max(0, Math.round(ratio * (count - 1))));
+    };
+
+    document.querySelectorAll(".chart-brush").forEach((el) => {
+      let data;
+      try { data = JSON.parse(el.getAttribute("data-brush") || "{}"); }
+      catch (_) { return; }
+      const stamps = data.timestamps || [];
+      const ends = data.timestampEnds || [];
+      if (!stamps.length) return;
+
+      const rect = el.querySelector(".brush-rect");
+      let dragging = false;
+      let startX = 0;
+
+      const showRect = (x0, x1) => {
+        if (!rect) return;
+        const left = Math.min(x0, x1);
+        const width = Math.abs(x1 - x0);
+        rect.style.left = left + "px";
+        rect.style.width = Math.max(width, 2) + "px";
+        rect.style.display = "block";
+      };
+
+      el.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX - el.getBoundingClientRect().left;
+        showRect(startX, startX);
+        e.preventDefault();
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const x = e.clientX - el.getBoundingClientRect().left;
+        showRect(startX, x);
+      });
+
+      window.addEventListener("mouseup", (e) => {
+        if (!dragging) return;
+        dragging = false;
+        if (rect) rect.style.display = "none";
+        const endX = e.clientX;
+        const i0 = indexFromClientX(el, Math.min(startX + el.getBoundingClientRect().left, endX), stamps.length);
+        const i1 = indexFromClientX(el, Math.max(startX + el.getBoundingClientRect().left, endX), stamps.length);
+        if (Math.abs(endX - (startX + el.getBoundingClientRect().left)) < 8) return;
+        navigateTimeRange(stamps[i0], ends[i1] || ends[i0] || stamps[i0]);
+      });
+
+      el.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        resetTimeRange();
+      });
+    });
+
+    document.querySelectorAll("button.model-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const model = btn.getAttribute("data-model") || "";
+        const row = btn.closest("tr");
+        if (!row) return;
+        const expanded = row.classList.toggle("expanded");
+        btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+        const marker = btn.querySelector(".toggle-marker");
+        if (marker) marker.textContent = expanded ? "▾" : "▸";
+        document.querySelectorAll("tr.effort-row").forEach((child) => {
+          if (child.getAttribute("data-parent") !== model) return;
+          child.hidden = !expanded;
+        });
+      });
+    });
+  })();
+JS
+
+def render_page(rows:, summary:, buckets_info:, models:, effort_rows:,
                 error_breakdown:, failures:,
                 range_preset:, from_raw:, to_raw:, from_time:, to_time:, model_filter:,
                 available_models:, sort_key:, sort_dir:,
-                metrics_from_raw:, metrics_to_raw:, metrics_from:, metrics_to:,
                 model_timeseries:, error: nil)
   filters_active = !model_filter.to_s.empty? || !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
                    (range_preset && range_preset != DEFAULT_RANGE)
+  custom_range = !(from_raw.to_s.empty? && to_raw.to_s.empty?)
 
   base_params = {
     range: range_preset,
@@ -1081,10 +1205,7 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
     to: to_raw,
     model: model_filter,
     sort: sort_key,
-    dir: sort_dir,
-    expand: expand_model,
-    m_from: metrics_from_raw,
-    m_to: metrics_to_raw
+    dir: sort_dir
   }
 
   body_html =
@@ -1098,17 +1219,14 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
         buckets_info: buckets_info,
         models: models,
         effort_rows: effort_rows,
-        expand_model: expand_model,
         error_breakdown: error_breakdown,
         failures: failures,
         base_params: base_params,
         sort_key: sort_key,
         sort_dir: sort_dir,
         model_timeseries: model_timeseries,
-        metrics_from_raw: metrics_from_raw,
-        metrics_to_raw: metrics_to_raw,
-        metrics_from: metrics_from,
-        metrics_to: metrics_to
+        custom_range: custom_range,
+        range_preset: range_preset
       )
     end
 
@@ -1123,6 +1241,13 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
                     selected = m == model_filter ? " selected" : ""
                     %(<option value="#{h(m)}"#{selected}>#{h(m)}</option>)
                   end
+
+  page_params_json = JSON.generate(
+    "range" => (range_preset || DEFAULT_RANGE).to_s,
+    "model" => model_filter.to_s,
+    "sort" => sort_key.to_s,
+    "dir" => sort_dir.to_s
+  )
 
   <<~HTML
     <!DOCTYPE html>
@@ -1169,9 +1294,6 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
         <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
         <input type="hidden" name="sort" value="#{h(sort_key)}">
         <input type="hidden" name="dir" value="#{h(sort_dir)}">
-        #{%(<input type="hidden" name="expand" value="#{h(expand_model)}">) unless expand_model.to_s.empty?}
-        #{%(<input type="hidden" name="m_from" value="#{h(metrics_from_raw)}">) unless metrics_from_raw.to_s.empty?}
-        #{%(<input type="hidden" name="m_to" value="#{h(metrics_to_raw)}">) unless metrics_to_raw.to_s.empty?}
         <div class="field field-actions">
           <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
@@ -1181,54 +1303,74 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
       <main>
         #{body_html}
       </main>
+      <script type="application/json" id="jorm-page-params">#{page_params_json}</script>
+      <script>#{BRUSH_AND_TOGGLE_JS}</script>
     </body>
     </html>
   HTML
 end
 
-def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_model:,
+def render_dashboard(summary:, buckets_info:, models:, effort_rows:,
                      error_breakdown:, failures:,
                      base_params:, sort_key:, sort_dir:, model_timeseries:,
-                     metrics_from_raw:, metrics_to_raw:, metrics_from:, metrics_to:)
+                     custom_range:, range_preset:)
   buckets = buckets_info["buckets"]
+  bucket_seconds = buckets_info["bucket_seconds"]
+  brush = bucket_brush_times(buckets, bucket_seconds)
 
-  traffic_svg = svg_bar_chart(buckets, value_key: "requests", error_key: "errors")
-  latency_svg = svg_line_chart(
-    buckets,
-    series: [
-      { label: "TTFT p50", color: "#2563eb", aggregator: ->(b) { percentile(b["ttft"], 50) } },
-      { label: "TTFT p95", color: "#93c5fd", aggregator: ->(b) { percentile(b["ttft"], 95) } },
-      { label: "Total p50", color: "#16a34a", aggregator: ->(b) { percentile(b["duration"], 50) } },
-      { label: "Total p95", color: "#86efac", aggregator: ->(b) { percentile(b["duration"], 95) } }
-    ]
+  traffic_svg = wrap_brushable(
+    svg_bar_chart(buckets, value_key: "requests", error_key: "errors"),
+    timestamps: brush["timestamps"],
+    timestamp_ends: brush["timestamp_ends"]
   )
-  tps_svg = svg_line_chart(
-    buckets,
-    series: [
-      {
-        label: "tokens/sec avg",
-        color: "#ca8a04",
-        aggregator: lambda { |b|
-          vals = b["tokens_per_sec"]
-          vals.empty? ? nil : vals.sum / vals.size.to_f
+  latency_svg = wrap_brushable(
+    svg_line_chart(
+      buckets,
+      series: [
+        { label: "TTFT p50", color: "#2563eb", aggregator: ->(b) { percentile(b["ttft"], 50) } },
+        { label: "TTFT p95", color: "#93c5fd", aggregator: ->(b) { percentile(b["ttft"], 95) } },
+        { label: "Total p50", color: "#16a34a", aggregator: ->(b) { percentile(b["duration"], 50) } },
+        { label: "Total p95", color: "#86efac", aggregator: ->(b) { percentile(b["duration"], 95) } }
+      ]
+    ),
+    timestamps: brush["timestamps"],
+    timestamp_ends: brush["timestamp_ends"]
+  )
+  tps_svg = wrap_brushable(
+    svg_line_chart(
+      buckets,
+      series: [
+        {
+          label: "tokens/sec avg",
+          color: "#ca8a04",
+          aggregator: lambda { |b|
+            vals = b["tokens_per_sec"]
+            vals.empty? ? nil : vals.sum / vals.size.to_f
+          }
         }
-      }
-    ]
+      ]
+    ),
+    timestamps: brush["timestamps"],
+    timestamp_ends: brush["timestamp_ends"]
   )
-  tokens_svg = svg_stacked_token_chart(buckets)
+  tokens_svg = wrap_brushable(
+    svg_stacked_token_chart(buckets),
+    timestamps: brush["timestamps"],
+    timestamp_ends: brush["timestamp_ends"]
+  )
 
-  zoomed = !(metrics_from_raw.to_s.empty? && metrics_to_raw.to_s.empty?)
-  reset_href = query_string(base_params.merge(m_from: nil, m_to: nil))
+  reset_href = query_string(base_params.merge(from: nil, to: nil, range: range_preset || DEFAULT_RANGE))
   zoom_hint = <<~HTML
-    <div class="metrics-zoom-hint">
-      <span><strong>Drag</strong> on a chart to select a time range · <strong>double-click</strong> to reset</span>
-      #{if zoomed
-          %(<a class="btn btn-ghost" href="/#{h(reset_href)}">Reset metrics zoom</a>)
+    <div class="zoom-hint">
+      <span><strong>Drag</strong> on any chart to select a time range · <strong>double-click</strong> to reset</span>
+      #{if custom_range
+          %(<a class="btn btn-ghost" href="/#{h(reset_href)}">Reset zoom</a>)
         end}
     </div>
   HTML
 
   <<~HTML
+    #{zoom_hint}
     <section class="stats" aria-label="Summary">
       <div class="stat stat-primary">
         <span class="stat-value">#{format_int(summary["requests"])}</span>
@@ -1267,13 +1409,11 @@ def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_mode
     <div class="grid">
       <section class="panel panel-full">
         <h2>Model Performance Metrics</h2>
-        <p class="panel-hint">One line per model over time · drag to zoom like Datadog · table uses the page range</p>
-        #{zoom_hint}
-        #{render_per_model_chart(model_timeseries, base_params: base_params)}
+        <p class="panel-hint">One line per model over time · drag any chart to zoom the whole page</p>
+        #{render_per_model_chart(model_timeseries)}
         #{render_model_table(
           models,
           effort_rows: effort_rows,
-          expand_model: expand_model,
           base_params: base_params,
           sort_key: sort_key,
           sort_dir: sort_dir
@@ -1385,7 +1525,7 @@ def short_model_label(model)
   "#{name[0, 25]}…"
 end
 
-def render_per_model_chart(timeseries, base_params:)
+def render_per_model_chart(timeseries)
   series = timeseries["series"] || []
   return %(<p class="muted">No model data.</p>) if series.empty? || timeseries["labels"].empty?
 
@@ -1393,15 +1533,6 @@ def render_per_model_chart(timeseries, base_params:)
     labels: timeseries["labels"],
     timestamps: timeseries["timestamps"],
     timestampEnds: timeseries["timestamp_ends"],
-    pageParams: {
-      "range" => base_params[:range].to_s,
-      "from" => base_params[:from].to_s,
-      "to" => base_params[:to].to_s,
-      "model" => base_params[:model].to_s,
-      "sort" => base_params[:sort].to_s,
-      "dir" => base_params[:dir].to_s,
-      "expand" => base_params[:expand].to_s
-    }.reject { |_, v| v.nil? || v.empty? },
     series: series.map do |s|
       {
         name: s["name"],
@@ -1433,19 +1564,6 @@ def render_per_model_chart(timeseries, base_params:)
         };
         const fmtTps = (v) => (v == null || Number.isNaN(v) ? "n/a" : v.toFixed(1) + " tok/s");
 
-        const navigateMetricsRange = (from, to) => {
-          const params = new URLSearchParams();
-          Object.entries(data.pageParams || {}).forEach(([k, v]) => {
-            if (v != null && v !== "") params.set(k, v);
-          });
-          if (from) params.set("m_from", from);
-          else params.delete("m_from");
-          if (to) params.set("m_to", to);
-          else params.delete("m_to");
-          const qs = params.toString();
-          window.location.search = qs ? ("?" + qs) : "";
-        };
-
         const applyBrush = (chart) => {
           const x = chart.scales.x;
           if (!x || !data.timestamps || data.timestamps.length === 0) return;
@@ -1454,10 +1572,11 @@ def render_per_model_chart(timeseries, base_params:)
           i0 = Math.max(0, i0);
           i1 = Math.min(data.timestamps.length - 1, i1);
           if (i1 <= i0) i1 = Math.min(data.timestamps.length - 1, i0 + 1);
-          navigateMetricsRange(data.timestamps[i0], data.timestampEnds[i1]);
+          const navigate = window.jormNavigateTimeRange;
+          if (typeof navigate === "function") {
+            navigate(data.timestamps[i0], data.timestampEnds[i1]);
+          }
         };
-
-        const resetBrush = () => navigateMetricsRange(null, null);
 
         const lineDatasets = (valueKey) => data.series.map((s) => ({
           label: s.label,
@@ -1507,7 +1626,13 @@ def render_per_model_chart(timeseries, base_params:)
           },
           scales: {
             x: {
-              ticks: { maxRotation: 45, autoSkip: true, font: { size: 11 } },
+              ticks: {
+                maxRotation: 0,
+                minRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 8,
+                font: { size: 10 }
+              },
               grid: { display: false }
             },
             y: {
@@ -1523,7 +1648,7 @@ def render_per_model_chart(timeseries, base_params:)
           if (!canvas) return;
           canvas.addEventListener("dblclick", (e) => {
             e.preventDefault();
-            resetBrush();
+            if (typeof window.jormResetTimeRange === "function") window.jormResetTimeRange();
           });
         };
 
@@ -1564,7 +1689,7 @@ def render_model_metric_cells(row)
   HTML
 end
 
-def render_model_table(models, effort_rows:, expand_model:, base_params:, sort_key:, sort_dir:)
+def render_model_table(models, effort_rows:, base_params:, sort_key:, sort_dir:)
   return %(<p class="muted">No model data.</p>) if models.empty?
 
   headers = MODEL_COLUMN_ORDER.map do |key|
@@ -1593,36 +1718,26 @@ def render_model_table(models, effort_rows:, expand_model:, base_params:, sort_k
   end.join
 
   body = models.map do |m|
-    expanded = expand_model == m["model"]
-    toggle_expand = expanded ? nil : m["model"]
-    toggle_href = query_string(base_params.merge(expand: toggle_expand))
-    marker = expanded ? "▾" : "▸"
-    row_class = expanded ? "model-row expanded" : "model-row"
+    children = efforts_for_model(effort_rows, m["model"], sort_key, sort_dir).map do |e|
+      <<~HTML
+        <tr class="effort-row" data-parent="#{h(m["model"])}" hidden>
+          <td class="mono"><span class="effort-label">#{h(e["think_effort"])}</span></td>
+          #{render_model_metric_cells(e)}
+        </tr>
+      HTML
+    end.join
 
-    parent = <<~HTML
-      <tr class="#{row_class}">
+    <<~HTML
+      <tr class="model-row">
         <td class="mono">
-          <a class="model-toggle" href="/#{h(toggle_href)}" title="#{expanded ? "Hide" : "Show"} think effort breakdown">
-            <span class="toggle-marker" aria-hidden="true">#{marker}</span>#{h(m["model"])}
-          </a>
+          <button type="button" class="model-toggle" data-model="#{h(m["model"])}" aria-expanded="false" title="Show think effort breakdown">
+            <span class="toggle-marker" aria-hidden="true">▸</span>#{h(m["model"])}
+          </button>
         </td>
         #{render_model_metric_cells(m)}
       </tr>
+      #{children}
     HTML
-
-    children = ""
-    if expanded
-      children = efforts_for_model(effort_rows, m["model"], sort_key, sort_dir).map do |e|
-        <<~HTML
-          <tr class="effort-row">
-            <td class="mono"><span class="effort-label">#{h(e["think_effort"])}</span></td>
-            #{render_model_metric_cells(e)}
-          </tr>
-        HTML
-      end.join
-    end
-
-    parent + children
   end.join
 
   <<~HTML
@@ -1677,9 +1792,6 @@ server.mount_proc "/" do |req, res|
   to_raw = req.query["to"].to_s
   model_filter = req.query["model"].to_s
   sort_key, sort_dir = normalize_model_sort(req.query["sort"], req.query["dir"])
-  expand_model = req.query["expand"].to_s
-  metrics_from_raw = req.query["m_from"].to_s
-  metrics_to_raw = req.query["m_to"].to_s
 
   from_time, to_time, effective_preset = resolve_range(
     preset: range_preset,
@@ -1688,41 +1800,27 @@ server.mount_proc "/" do |req, res|
   )
   range_preset = effective_preset if effective_preset
 
-  metrics_from, metrics_to = resolve_metrics_range(
-    from_raw: metrics_from_raw,
-    to_raw: metrics_to_raw,
-    page_from: from_time,
-    page_to: to_time
-  )
-
-  fetch_from = [from_time, metrics_from].compact.min
-  fetch_to = [to_time, metrics_to].compact.max
-
-  all_rows = []
+  rows = []
   all_models = []
   error = nil
   begin
-    raw = fetch_rows(from_time: fetch_from, to_time: fetch_to)
-    all_rows = raw.map { |r| normalize_row(r) }
-    all_models = available_models(all_rows)
-    all_rows = all_rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
+    raw = fetch_rows(from_time: from_time, to_time: to_time)
+    rows = raw.map { |r| normalize_row(r) }
+    all_models = available_models(rows)
+    rows = rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
   rescue StandardError => e
     source = DEMO_MODE ? "demo fixture" : "GreptimeDB"
     error = "Failed to load #{source}: #{e.class}: #{e.message}"
     warn error
   end
 
-  rows = filter_rows_by_time(all_rows, from_time, to_time)
-  metrics_rows = filter_rows_by_time(all_rows, metrics_from, metrics_to)
-
   summary = build_summary(rows)
   buckets_info = build_buckets(rows, from_time, to_time)
   models = sort_models(build_per_model(rows), sort_key, sort_dir)
   effort_rows = build_per_model_effort(rows)
-  expand_model = "" unless models.any? { |m| m["model"] == expand_model }
   error_breakdown = build_error_breakdown(rows)
   failures = recent_failures(rows)
-  model_timeseries = build_per_model_timeseries(metrics_rows, metrics_from, metrics_to)
+  model_timeseries = build_per_model_timeseries(rows, from_time, to_time)
 
   res.status = 200
   res["Content-Type"] = "text/html; charset=utf-8"
@@ -1732,7 +1830,6 @@ server.mount_proc "/" do |req, res|
     buckets_info: buckets_info,
     models: models,
     effort_rows: effort_rows,
-    expand_model: expand_model,
     error_breakdown: error_breakdown,
     failures: failures,
     range_preset: range_preset,
@@ -1744,10 +1841,6 @@ server.mount_proc "/" do |req, res|
     available_models: all_models,
     sort_key: sort_key,
     sort_dir: sort_dir,
-    metrics_from_raw: metrics_from_raw,
-    metrics_to_raw: metrics_to_raw,
-    metrics_from: metrics_from,
-    metrics_to: metrics_to,
     model_timeseries: model_timeseries,
     error: error
   )
