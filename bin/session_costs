@@ -121,6 +121,43 @@ def format_tokens(count)
   count.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
 end
 
+# Tokenizer-free size estimate used for per-section chips. Not exact API
+# billing; billed input/output still come from usage when available.
+def estimate_tokens(value)
+  bytes =
+    case value
+    when nil, "" then 0
+    when String then value.bytesize
+    when Numeric, TrueClass, FalseClass then value.to_s.bytesize
+    else
+      begin
+        JSON.generate(value).bytesize
+      rescue StandardError
+        value.to_s.bytesize
+      end
+    end
+  return 0 if bytes <= 0
+
+  [(bytes / 4.0).ceil, 1].max
+end
+
+def token_chip(count, estimated: true)
+  return "" if count.nil?
+
+  n = count.to_i
+  return "" if n <= 0
+
+  label = estimated ? "~#{format_tokens(n)} tok" : "#{format_tokens(n)} tok"
+  title = estimated ? "Estimated from content size (~4 bytes / token)" : "From API usage"
+  %(<span class="token-chip#{' token-chip-est' if estimated}" title="#{h(title)}">#{h(label)}</span>)
+end
+
+def message_token_payload(msg)
+  return msg unless msg.is_a?(Hash)
+
+  { "role" => msg["role"], "content" => msg["content"] }
+end
+
 def to_f_or_nil(value)
   return nil if value.nil? || value.to_s.empty?
 
@@ -628,6 +665,7 @@ def render_text_block(text)
     <div class="block block-text">
       <div class="block-header">
         <span class="block-badge">Text</span>
+        #{token_chip(estimate_tokens(text))}
       </div>
       <div class="block-body">#{inner}</div>
     </div>
@@ -654,6 +692,7 @@ def render_skill_load_block(raw)
       <div class="block-header">
         <span class="block-badge">Skill loaded</span>
         <span class="block-meta mono" title="#{h(path)}">#{h(skill_name)}</span>
+        #{token_chip(estimate_tokens(raw))}
       </div>
       #{%(<p class="skill-path mono">#{h(path)}</p>) unless path.empty?}
       #{%(<pre class="content">#{h(body)}</pre>) unless body.empty?}
@@ -669,12 +708,14 @@ def render_content_block(block)
   when "text"
     render_text_block(block["text"])
   when "thinking"
+    thinking = block["thinking"]
     <<~HTML
       <div class="block block-thinking">
         <div class="block-header">
           <span class="block-badge">Thinking</span>
+          #{token_chip(estimate_tokens(thinking))}
         </div>
-        <pre class="content">#{h(block["thinking"])}</pre>
+        <pre class="content">#{h(thinking)}</pre>
       </div>
     HTML
   when "tool_use"
@@ -687,6 +728,7 @@ def render_content_block(block)
         <div class="block-header">
           <span class="block-badge">Tool use</span>
           <span class="block-meta mono" title="#{h(name)}">#{h(name)}</span>
+          #{token_chip(estimate_tokens({ "name" => name, "input" => input }))}
         </div>
         <pre class="content">#{h(input_text)}</pre>
       </div>
@@ -714,6 +756,7 @@ def render_content_block(block)
         <div class="block-header">
           <span class="block-badge">#{h(badge)}</span>
           #{meta_html}
+          #{token_chip(estimate_tokens(content))}
         </div>
         <div class="block-body">#{content_html}</div>
       </div>
@@ -723,6 +766,7 @@ def render_content_block(block)
       <div class="block block-image">
         <div class="block-header">
           <span class="block-badge">Image</span>
+          #{token_chip(estimate_tokens(block))}
         </div>
         <pre class="content">#{h(pretty_json(block))}</pre>
       </div>
@@ -733,6 +777,7 @@ def render_content_block(block)
       <div class="block block-other">
         <div class="block-header">
           <span class="block-badge">#{h(label)}</span>
+          #{token_chip(estimate_tokens(block))}
         </div>
         <pre class="content">#{h(pretty_json(block))}</pre>
       </div>
@@ -768,7 +813,10 @@ def render_system_prompt(system, req_index:)
 
   <<~HTML
     <div class="msg" id="req-#{req_index}-system">
-      <div class="msg-role">system</div>
+      <div class="msg-role">
+        <span>system</span>
+        #{token_chip(estimate_tokens(system))}
+      </div>
       <div class="msg-body scrollable">#{body}</div>
     </div>
   HTML
@@ -779,7 +827,10 @@ def render_full_message(msg, req_index:, msg_index:)
 
   <<~HTML
     <div class="msg" id="req-#{req_index}-m-#{msg_index}">
-      <div class="msg-role">#{h(msg["role"] || "message")}</div>
+      <div class="msg-role">
+        <span>#{h(msg["role"] || "message")}</span>
+        #{token_chip(estimate_tokens(message_token_payload(msg)))}
+      </div>
       <div class="msg-body scrollable">#{render_message_content(msg["content"])}</div>
     </div>
   HTML
@@ -801,12 +852,8 @@ def render_shared_history_chip(segment)
   from_index = segment["from_index"]
   count = segment["count"]
   roles = segment["roles"]
-  target_id =
-    if count == 1
-      "req-#{from_req}-m-#{from_index}"
-    else
-      "req-#{from_req}-m-#{from_index}"
-    end
+  target_id = "req-#{from_req}-m-#{from_index}"
+  tok = Array(segment["messages"]).sum { |m| estimate_tokens(message_token_payload(m)) }
 
   label =
     if count == 1
@@ -816,10 +863,12 @@ def render_shared_history_chip(segment)
     end
 
   expanded = segment["messages"].map do |msg|
-    # Show-here copies don't need unique anchors; they are display-only.
     <<~HTML
       <div class="msg">
-        <div class="msg-role">#{h(message_role(msg))}</div>
+        <div class="msg-role">
+          <span>#{h(message_role(msg))}</span>
+          #{token_chip(estimate_tokens(message_token_payload(msg)))}
+        </div>
         <div class="msg-body scrollable">#{render_message_content(msg.is_a?(Hash) ? msg["content"] : msg)}</div>
       </div>
     HTML
@@ -828,7 +877,7 @@ def render_shared_history_chip(segment)
   <<~HTML
     <div class="history-chip" data-target="#{h(target_id)}" data-source-req="#{from_req}">
       <div class="history-chip-main">
-        <span class="history-chip-label">#{h(label)}</span>
+        <span class="history-chip-label">#{h(label)} #{token_chip(tok)}</span>
         <span class="history-chip-actions">
           <button type="button" class="history-link" data-action="jump">Jump to source</button>
           <button type="button" class="history-link" data-action="toggle">Show here</button>
@@ -841,12 +890,13 @@ def render_shared_history_chip(segment)
   HTML
 end
 
-def render_system_ref_chip(from_req)
+def render_system_ref_chip(from_req, system: nil)
   target_id = "req-#{from_req}-system"
+  chip = system.nil? ? "" : token_chip(estimate_tokens(system))
   <<~HTML
     <div class="history-chip" data-target="#{h(target_id)}" data-source-req="#{from_req}">
       <div class="history-chip-main">
-        <span class="history-chip-label">Same system prompt as ##{from_req}</span>
+        <span class="history-chip-label">Same system prompt as ##{from_req} #{chip}</span>
         <span class="history-chip-actions">
           <button type="button" class="history-link" data-action="jump">Jump to source</button>
         </span>
@@ -876,6 +926,7 @@ def render_tools_summary(tools)
       <div class="tools-panel-header">
         <span class="block-badge tools-badge">Tools</span>
         <span class="tools-count">#{tools.size} available</span>
+        #{token_chip(estimate_tokens(tools))}
       </div>
       <div class="tools-chips">#{chips}</div>
     </div>
@@ -912,7 +963,7 @@ def render_request_body(req)
 
   system_html =
     if req["system_ref"]
-      render_system_ref_chip(req["system_ref"]["from_req"])
+      render_system_ref_chip(req["system_ref"]["from_req"], system: body["system"])
     else
       render_system_prompt(body["system"], req_index: req_index)
     end
@@ -982,10 +1033,20 @@ def render_response_body(req)
 
   content_html = render_message_content(body["content"])
   stop = body["stop_reason"]
+  # Prefer billed output tokens when present; otherwise estimate from content.
+  resp_tok =
+    if req["output_tokens"]
+      token_chip(req["output_tokens"], estimated: false)
+    else
+      token_chip(estimate_tokens(body["content"]))
+    end
 
   <<~HTML
     <div class="msg">
-      <div class="msg-role">assistant</div>
+      <div class="msg-role">
+        <span>assistant</span>
+        #{resp_tok}
+      </div>
       <div class="msg-body scrollable">#{content_html}</div>
     </div>
     #{%(<p class="stop-reason"><strong>Stop reason</strong> · #{h(stop)}</p>) if stop}
@@ -1014,6 +1075,19 @@ def render_request_card(req, open_details:)
   open_attr = open_details ? " open" : ""
   model = req["model"].to_s.empty? ? "—" : req["model"]
   req_index = req["index"]
+  body = req["req_body"]
+  req_tok =
+    if req["input_tokens"]
+      token_chip(req["input_tokens"], estimated: false)
+    else
+      token_chip(estimate_tokens(body))
+    end
+  resp_tok =
+    if req["output_tokens"]
+      token_chip(req["output_tokens"], estimated: false)
+    else
+      token_chip(estimate_tokens(req["resp_body"] || req["resp_body_raw"]))
+    end
 
   <<~HTML
     <article class="req-card" id="req-#{req_index}">
@@ -1050,12 +1124,12 @@ def render_request_card(req, open_details:)
       </div>
 
       <details class="section-details request-section"#{open_attr}>
-        <summary>Request</summary>
+        <summary>Request #{req_tok}</summary>
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
 
       <details class="section-details"#{open_attr}>
-        <summary>Response</summary>
+        <summary>Response #{resp_tok}</summary>
         <div class="section-body">#{render_response_body(req)}</div>
       </details>
     </article>
@@ -1627,6 +1701,10 @@ PAGE_CSS = <<~CSS
     transition: outline-color 0.2s;
   }
   .msg-role {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -1640,6 +1718,34 @@ PAGE_CSS = <<~CSS
   .scrollable {
     max-height: 28rem;
     overflow: auto;
+  }
+
+  .token-chip {
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    text-transform: none;
+    color: #555;
+    background: rgba(127, 127, 127, 0.12);
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 999px;
+    padding: 0.1rem 0.45rem;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+  .token-chip-est { color: #666; }
+  .block-header .token-chip,
+  .tools-panel-header .token-chip,
+  .history-chip-label .token-chip,
+  summary .token-chip { margin-left: 0.35rem; }
+  @media (prefers-color-scheme: dark) {
+    .token-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
+    .token-chip-est { color: #bbb; }
   }
 
   .history-chip {
