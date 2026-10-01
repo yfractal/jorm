@@ -749,78 +749,6 @@ def human_input_kind?(kind)
   HUMAN_INPUT_KINDS.include?(kind)
 end
 
-# Every distinct thing the human typed in a session, in order. Each prompt is
-# resent in all later requests, so it is reported once, at the request /
-# message where it first appears.
-def extract_human_inputs(detail)
-  seen = {}
-  inputs = []
-
-  Array(detail && detail["requests"]).each do |req|
-    body = req["req_body"]
-    messages = body.is_a?(Hash) ? body["messages"] : nil
-    next unless messages.is_a?(Array)
-
-    messages.each_with_index do |msg, msg_index|
-      next unless msg.is_a?(Hash) && msg["role"].to_s == "user"
-
-      content = msg["content"]
-      blocks =
-        case content
-        when String then [{ "type" => "text", "text" => content }]
-        when Array then content.select { |b| b.is_a?(Hash) && b["type"].to_s == "text" }
-        else []
-        end
-
-      blocks.each do |block|
-        text = block["text"].to_s
-        kind = classify_user_text(text)
-        next unless human_input_kind?(kind)
-
-        key = text.strip
-        next if seen[key]
-
-        seen[key] = true
-        inputs << {
-          "kind" => kind,
-          "text" => key,
-          "req_index" => req["index"],
-          "msg_index" => msg_index
-        }
-      end
-    end
-  end
-
-  inputs
-end
-
-def render_human_inputs_panel(inputs)
-  return "" if inputs.nil? || inputs.empty?
-
-  items = inputs.map do |input|
-    label = user_input_badge(input["text"], input["kind"])
-    target = "req-#{input["req_index"]}-m-#{input["msg_index"]}"
-    shown = input["kind"] == :user_command ? command_display_text(input["text"]) : input["text"]
-    <<~HTML
-      <li class="human-input-item">
-        <div class="human-input-meta">
-          <span class="block-badge">#{h(label)}</span>
-          <a class="human-input-link mono" href="##{h(target)}" data-target="#{h(target)}" data-source-req="#{input["req_index"]}">first seen in ##{input["req_index"]}</a>
-        </div>
-        <pre class="content user-input-text">#{h(shown)}</pre>
-      </li>
-    HTML
-  end.join
-
-  <<~HTML
-    <section class="human-inputs" aria-label="Human input">
-      <h2 class="human-inputs-title">Human input <span class="human-inputs-count">#{inputs.size}</span></h2>
-      <p class="human-inputs-hint">Only what was typed by the user; reminders, skill payloads and Claude Code's own prompts are excluded.</p>
-      <ol class="human-input-list">#{items}</ol>
-    </section>
-  HTML
-end
-
 # "/dummy" (+ args) instead of the raw <command-message> markup.
 def command_display_text(text)
   name = text.to_s[%r{<command-name>\s*([^<]+?)\s*</command-name>}i, 1]
@@ -904,20 +832,21 @@ def render_meta_text_block(text, kind:)
 end
 
 def user_input_badge(text, kind)
-  return "User input" unless kind == :user_command
+  return "Typed" unless kind == :user_command
 
   name = text.to_s[%r{<command-name>\s*([^<]+?)\s*</command-name>}i, 1]
-  name ? "User command · #{name}" : "User command"
+  name ? "Slash · #{name}" : "Slash command"
 end
 
 def render_user_input_block(text, kind: :user_input)
+  shown = kind == :user_command ? command_display_text(text) : text.to_s
   <<~HTML
     <div class="block block-user-input">
       <div class="block-header">
         <span class="block-badge">#{h(user_input_badge(text, kind))}</span>
         #{token_chip(estimate_tokens(text))}
       </div>
-      <pre class="content user-input-text">#{h(text)}</pre>
+      <pre class="content user-input-text">#{h(shown)}</pre>
     </div>
   HTML
 end
@@ -952,12 +881,16 @@ def render_text_block(text, role: nil)
   HTML
 end
 
-def render_skill_load_block(raw)
+def skill_name_from_path(path)
+  name = path.to_s.split("/").reject(&:empty?).last.to_s
+  name.empty? ? "skill" : name
+end
+
+def parse_skill_load(raw)
   lines = raw.to_s.sub(/\A\n+/, "").sub(/\n+\z/, "").split("\n", -1)
   path_line = lines.first.to_s
   path = path_line.sub(/\ABase directory for this skill:\s*/, "").strip
-  skill_name = path.split("/").reject(&:empty?).last.to_s
-  skill_name = "skill" if skill_name.empty?
+  skill_name = skill_name_from_path(path)
 
   body_lines = lines.drop(1)
   body_lines.shift while body_lines.first&.strip&.empty?
@@ -966,6 +899,74 @@ def render_skill_load_block(raw)
     body_lines.shift while body_lines.first&.strip&.empty?
   end
   body = body_lines.join("\n").sub(/\A\n+/, "").sub(/\n+\z/, "")
+
+  { "name" => skill_name, "path" => path, "body" => body }
+end
+
+def extract_skill_loads_from_text(text)
+  text.to_s.to_enum(:scan, skill_load_pattern).map do
+    parse_skill_load(Regexp.last_match[0])
+  end
+end
+
+# Skills that first appear in this request (not ones only resent via shared
+# history refs). Order preserved; duplicates by path collapsed.
+def request_loaded_skills(req)
+  messages =
+    if req["message_segments"].is_a?(Array) && !req["message_segments"].empty?
+      req["message_segments"].filter_map do |seg|
+        next unless seg.is_a?(Hash) && seg["type"] == "full"
+
+        seg["message"]
+      end
+    else
+      body = req["req_body"]
+      body.is_a?(Hash) && body["messages"].is_a?(Array) ? body["messages"] : []
+    end
+
+  seen = {}
+  skills = []
+  messages.each do |msg|
+    next unless msg.is_a?(Hash)
+
+    content = msg["content"]
+    texts =
+      case content
+      when String then [content]
+      when Array
+        content.filter_map { |b| b["text"] if b.is_a?(Hash) && b["type"].to_s == "text" }
+      else
+        []
+      end
+
+    texts.each do |text|
+      extract_skill_loads_from_text(text).each do |skill|
+        key = skill["path"].empty? ? skill["name"] : skill["path"]
+        next if seen[key]
+
+        seen[key] = true
+        skills << skill
+      end
+    end
+  end
+  skills
+end
+
+def skill_load_chip(skills)
+  return "" if skills.nil? || skills.empty?
+
+  skills.map do |skill|
+    label = "skill #{skill["name"]}"
+    title = skill["path"].empty? ? "Skill loaded" : skill["path"]
+    %(<span class="skill-load-chip mono" title="#{h(title)}">#{h(label)}</span>)
+  end.join
+end
+
+def render_skill_load_block(raw)
+  parsed = parse_skill_load(raw)
+  path = parsed["path"]
+  skill_name = parsed["name"]
+  body = parsed["body"]
 
   <<~HTML
     <div class="block block-skill">
@@ -1117,7 +1118,7 @@ def render_full_message(msg, req_index:, msg_index:)
   role = (msg["role"] || "message").to_s
   has_input = role == "user" && user_message_has_input?(msg["content"])
   msg_class = has_input ? "msg msg-user-input" : "msg"
-  role_label = has_input ? "user · input" : role
+  role_label = has_input ? "user · typed" : role
 
   <<~HTML
     <div class="#{msg_class}" id="req-#{req_index}-m-#{msg_index}">
@@ -1160,7 +1161,7 @@ def render_shared_history_chip(segment)
     role = message_role(msg)
     has_input = role == "user" && user_message_has_input?(msg.is_a?(Hash) ? msg["content"] : msg)
     msg_class = has_input ? "msg msg-user-input" : "msg"
-    role_label = has_input ? "user · input" : role
+    role_label = has_input ? "user · typed" : role
     content = msg.is_a?(Hash) ? msg["content"] : msg
     <<~HTML
       <div class="#{msg_class}">
@@ -1412,7 +1413,7 @@ def render_request_card(req, open_details:)
       </header>
 
       <details class="section-details request-section"#{open_attr}>
-        <summary>Request #{req_tok}#{cache_hit_chip(req)}</summary>
+        <summary>Request #{req_tok}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</summary>
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
 
@@ -1633,7 +1634,6 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
           </div>
         </section>
 
-        #{render_human_inputs_panel(extract_human_inputs(detail))}
 
         <div class="req-list">
           #{cards}
@@ -1677,18 +1677,6 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
           setTimeout(function () { el.classList.remove("flash"); }, 1200);
         }
         document.addEventListener("click", function (e) {
-          var humanLink = e.target.closest(".human-input-link");
-          if (humanLink) {
-            e.preventDefault();
-            var humanTarget = document.getElementById(humanLink.getAttribute("data-target"));
-            if (!humanTarget) return;
-            openRequestSection(humanTarget);
-            setTimeout(function () {
-              humanTarget.scrollIntoView({ behavior: "smooth", block: "center" });
-              flash(humanTarget);
-            }, 50);
-            return;
-          }
           var btn = e.target.closest("[data-action]");
           if (!btn) return;
           var chip = btn.closest(".history-chip");
@@ -1900,35 +1888,6 @@ PAGE_CSS = <<~CSS
 
   .req-list { display: flex; flex-direction: column; gap: 1rem; }
 
-  .human-inputs {
-    margin-bottom: 1.5rem;
-    padding: 0.9rem 1rem;
-    border: 1px solid rgba(22, 163, 74, 0.35);
-    border-left: 4px solid #16a34a;
-    border-radius: 8px;
-    background: rgba(22, 163, 74, 0.05);
-  }
-  .human-inputs-title { margin: 0 0 0.2rem; font-size: 1rem; }
-  .human-inputs-count {
-    margin-left: 0.4rem;
-    padding: 0 0.45rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    background: rgba(22, 163, 74, 0.15);
-    color: #166534;
-  }
-  .human-inputs-hint { margin: 0 0 0.75rem; font-size: 0.8rem; opacity: 0.7; }
-  .human-input-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
-  .human-input-item { display: flex; flex-direction: column; gap: 0.3rem; }
-  .human-input-meta { display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem; }
-  .human-input-item .block-badge {
-    color: #166534;
-    background: rgba(22, 163, 74, 0.14);
-    border-color: rgba(22, 163, 74, 0.35);
-  }
-  .human-input-link { opacity: 0.7; text-decoration: none; }
-  .human-input-link:hover { opacity: 1; text-decoration: underline; }
   .req-card {
     border: 1px solid rgba(127, 127, 127, 0.3);
     border-radius: 8px;
@@ -2033,15 +1992,11 @@ PAGE_CSS = <<~CSS
     transition: outline-color 0.2s;
   }
   .msg-user-input {
-    border-color: rgba(22, 163, 74, 0.45);
-    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.12);
+    border-color: rgba(79, 70, 229, 0.35);
   }
   .msg-user-input > .msg-role {
-    background: rgba(22, 163, 74, 0.12);
-    color: #166534;
-  }
-  @media (prefers-color-scheme: dark) {
-    .msg-user-input > .msg-role { color: #86efac; }
+    background: rgba(79, 70, 229, 0.1);
+    color: #3730a3;
   }
   .msg-role {
     display: flex;
@@ -2063,23 +2018,27 @@ PAGE_CSS = <<~CSS
     overflow: auto;
   }
 
+  /* Human-typed text: indigo accent, high-contrast body — distinct from
+     amber command-output and muted harness/reminder blocks. */
   .block-user-input {
-    border-left-color: #16a34a;
-    background: rgba(22, 163, 74, 0.07);
-    border-color: rgba(22, 163, 74, 0.35);
+    border-left-color: #4f46e5;
+    border-color: rgba(79, 70, 229, 0.35);
+    background: rgba(79, 70, 229, 0.06);
   }
-  .block-user-input .block-header { background: rgba(22, 163, 74, 0.12); }
+  .block-user-input .block-header { background: rgba(79, 70, 229, 0.1); }
   .block-user-input .block-badge {
-    color: #166534;
-    background: rgba(22, 163, 74, 0.16);
-    border-color: rgba(22, 163, 74, 0.4);
+    color: #3730a3;
+    background: rgba(79, 70, 229, 0.12);
+    border-color: rgba(79, 70, 229, 0.35);
   }
   .user-input-text {
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif !important;
-    font-size: 0.95rem !important;
+    font-size: 0.98rem !important;
     font-weight: 500;
-    line-height: 1.5;
-    color: #14532d;
+    line-height: 1.55;
+    color: #0f172a;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .block-reminder,
@@ -2121,11 +2080,9 @@ PAGE_CSS = <<~CSS
   }
 
   @media (prefers-color-scheme: dark) {
-    .block-user-input .block-badge,
-    .human-input-item .block-badge,
-    .human-inputs-count { color: #86efac; }
-    .human-input-item .user-input-text { color: #bbf7d0; }
-    .user-input-text { color: #bbf7d0; }
+    .msg-user-input > .msg-role { color: #c7d2fe; }
+    .block-user-input .block-badge { color: #a5b4fc; }
+    .user-input-text { color: #e2e8f0; }
     .block-reminder .block-badge,
     .block-harness .block-badge { color: #ccc; }
     .block-reminder > pre.content,
@@ -2152,7 +2109,8 @@ PAGE_CSS = <<~CSS
     line-height: 1.3;
   }
   .token-chip-est { color: #666; }
-  .cache-hit-chip {
+  .cache-hit-chip,
+  .skill-load-chip {
     display: inline-flex;
     align-items: center;
     margin-left: 0.35rem;
@@ -2168,6 +2126,11 @@ PAGE_CSS = <<~CSS
     white-space: nowrap;
     line-height: 1.3;
   }
+  .skill-load-chip {
+    color: #854d0e;
+    background: rgba(202, 138, 4, 0.14);
+    border-color: rgba(202, 138, 4, 0.4);
+  }
   .block-header .token-chip,
   .tools-panel-header .token-chip,
   .history-chip-label .token-chip,
@@ -2176,6 +2139,7 @@ PAGE_CSS = <<~CSS
     .token-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
     .token-chip-est { color: #bbb; }
     .cache-hit-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
+    .skill-load-chip { color: #fde68a; background: rgba(202, 138, 4, 0.22); }
   }
 
   .history-chip {
