@@ -33,6 +33,15 @@ GREPTIME_DB = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
 DEFAULT_PER_PAGE = 10
 CONTENT_PREVIEW_LEN = 200
 
+RANGE_PRESETS = {
+  "1h" => 3600,
+  "6h" => 6 * 3600,
+  "24h" => 24 * 3600,
+  "7d" => 7 * 24 * 3600
+}.freeze
+
+DEFAULT_RANGE = "24h"
+
 # ---------------------------------------------------------------------------
 # GreptimeDB HTTP SQL client
 # ---------------------------------------------------------------------------
@@ -62,6 +71,15 @@ def parse_time_param(raw)
   Time.parse(raw)
 rescue ArgumentError
   nil
+end
+
+def resolve_range(preset:, from_raw:, to_raw:)
+  from_time = parse_time_param(from_raw)
+  to_time = parse_time_param(to_raw)
+  return [from_time, to_time, nil] if from_time || to_time
+
+  seconds = RANGE_PRESETS[preset] || RANGE_PRESETS[DEFAULT_RANGE]
+  [Time.now.utc - seconds, Time.now.utc, preset]
 end
 
 def format_ts(ms_or_time)
@@ -221,22 +239,35 @@ def datetime_local_value(time)
   time.getlocal.strftime("%Y-%m-%dT%H:%M")
 end
 
-def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_time:, error: nil)
+def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, from_time:, to_time:, error: nil)
   total = sessions.size
   total_pages = [((total + per_page - 1) / per_page), 1].max
   page = page.clamp(1, total_pages)
   slice = sessions[((page - 1) * per_page), per_page] || []
-  filters_active = !(from_raw.to_s.empty? && to_raw.to_s.empty?) || per_page != DEFAULT_PER_PAGE
+  filters_active = !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
+                   (range_preset && range_preset != DEFAULT_RANGE) ||
+                   per_page != DEFAULT_PER_PAGE
 
   grand_total_cost = sessions.sum { |s| s["total_cost"] }
   grand_total_requests = sessions.sum { |s| s["requests"].size }
 
-  base_params = { from: from_raw, to: to_raw, per_page: per_page.to_s }
+  base_params = {
+    range: range_preset,
+    from: from_raw,
+    to: to_raw,
+    per_page: per_page.to_s
+  }
 
   prev_link = pager_link(base_params, page - 1, "← Prev", enabled: page > 1)
   next_link = pager_link(base_params, page + 1, "Next →", enabled: page < total_pages)
 
   session_rows = slice.map { |s| render_session_row(s) }.join
+
+  preset_links = RANGE_PRESETS.keys.map do |key|
+    cls = (range_preset == key && from_raw.to_s.empty? && to_raw.to_s.empty?) ? "active" : ""
+    href = query_string(base_params.merge(range: key, from: nil, to: nil, page: nil))
+    %(<a class="#{cls}" href="/#{h(href)}">#{key}</a>)
+  end.join
 
   body_html =
     if error
@@ -302,6 +333,10 @@ def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_
 
       <form class="filter" method="get" action="/">
         <div class="field">
+          <label>Range</label>
+          <div class="presets">#{preset_links}</div>
+        </div>
+        <div class="field">
           <label for="from">From</label>
           <input id="from" type="datetime-local" name="from" value="#{h(datetime_local_value(from_time) || from_raw.to_s)}">
         </div>
@@ -313,8 +348,9 @@ def render_page(sessions:, page:, per_page:, from_raw:, to_raw:, from_time:, to_
           <label for="per_page">Per page</label>
           <input id="per_page" type="number" name="per_page" min="1" max="100" value="#{per_page}">
         </div>
+        <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
         <div class="field field-actions">
-          <button type="submit" class="btn btn-primary">Apply filters</button>
+          <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
         </div>
       </form>
@@ -465,6 +501,18 @@ PAGE_CSS = <<~CSS
   .field input:focus { outline: 2px solid #2563eb; outline-offset: 1px; }
   .field-narrow input { width: 6rem; }
   .field-actions { flex-direction: row; gap: 0.5rem; }
+  .presets { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .presets a {
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    text-decoration: none;
+    color: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+  .presets a:hover { background: rgba(127, 127, 127, 0.12); }
+  .presets a.active { background: #2563eb; border-color: #2563eb; color: #fff; }
 
   .btn {
     display: inline-flex;
@@ -571,10 +619,17 @@ server = WEBrick::HTTPServer.new(
 )
 
 server.mount_proc "/" do |req, res|
+  range_preset = req.query["range"].to_s
+  range_preset = DEFAULT_RANGE unless RANGE_PRESETS.key?(range_preset) || range_preset.empty?
+  range_preset = DEFAULT_RANGE if range_preset.empty?
   from_raw = req.query["from"].to_s
   to_raw = req.query["to"].to_s
-  from_time = parse_time_param(from_raw)
-  to_time = parse_time_param(to_raw)
+  from_time, to_time, effective_preset = resolve_range(
+    preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw
+  )
+  range_preset = effective_preset if effective_preset
   page = Integer(req.query["page"] || 1, exception: false) || 1
   per_page = Integer(req.query["per_page"] || DEFAULT_PER_PAGE, exception: false) || DEFAULT_PER_PAGE
   page = 1 if page < 1
@@ -597,6 +652,7 @@ server.mount_proc "/" do |req, res|
     sessions: sessions,
     page: page,
     per_page: per_page,
+    range_preset: range_preset,
     from_raw: from_raw,
     to_raw: to_raw,
     from_time: from_time,
