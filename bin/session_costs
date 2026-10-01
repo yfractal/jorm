@@ -585,20 +585,89 @@ end
 # Content rendering (request / response bodies)
 # ---------------------------------------------------------------------------
 
+def skill_load_pattern
+  /
+    Base\ directory\ for\ this\ skill:\ [^\n]+
+    (?:\n(?!Base\ directory\ for\ this\ skill:)[^\n]*)*
+  /x
+end
+
+def render_text_content(text)
+  text = text.to_s
+  return %(<pre class="content"></pre>) if text.empty?
+
+  html = +""
+  last = 0
+  text.to_enum(:scan, skill_load_pattern).each do
+    match = Regexp.last_match
+    before = text[last...match.begin(0)]
+    html << %(<pre class="content">#{h(before)}</pre>) unless before.nil? || before.strip.empty?
+    html << render_skill_load_block(match[0])
+    last = match.end(0)
+  end
+  after = text[last..]
+  html << %(<pre class="content">#{h(after)}</pre>) unless after.nil? || after.strip.empty?
+  html
+end
+
+# True when the string is only one or more skill-load sections (plus whitespace).
+def skill_load_only?(text)
+  remainder = text.to_s.dup
+  remainder.gsub!(skill_load_pattern, "")
+  remainder.strip.empty? && text.to_s.match?(skill_load_pattern)
+end
+
+def render_text_block(text)
+  text = text.to_s
+  if skill_load_only?(text)
+    return render_text_content(text)
+  end
+
+  inner = render_text_content(text)
+  <<~HTML
+    <div class="block block-text">
+      <div class="block-header">
+        <span class="block-badge">Text</span>
+      </div>
+      <div class="block-body">#{inner}</div>
+    </div>
+  HTML
+end
+
+def render_skill_load_block(raw)
+  lines = raw.to_s.sub(/\A\n+/, "").sub(/\n+\z/, "").split("\n", -1)
+  path_line = lines.first.to_s
+  path = path_line.sub(/\ABase directory for this skill:\s*/, "").strip
+  skill_name = path.split("/").reject(&:empty?).last.to_s
+  skill_name = "skill" if skill_name.empty?
+
+  body_lines = lines.drop(1)
+  body_lines.shift while body_lines.first&.strip&.empty?
+  if body_lines.first&.match?(/\A#\s*Instructions\s*\z/i)
+    body_lines.shift
+    body_lines.shift while body_lines.first&.strip&.empty?
+  end
+  body = body_lines.join("\n").sub(/\A\n+/, "").sub(/\n+\z/, "")
+
+  <<~HTML
+    <div class="block block-skill">
+      <div class="block-header">
+        <span class="block-badge">Skill loaded</span>
+        <span class="block-meta mono" title="#{h(path)}">#{h(skill_name)}</span>
+      </div>
+      #{%(<p class="skill-path mono">#{h(path)}</p>) unless path.empty?}
+      #{%(<pre class="content">#{h(body)}</pre>) unless body.empty?}
+    </div>
+  HTML
+end
+
 def render_content_block(block)
-  return %(<pre class="content">#{h(block)}</pre>) unless block.is_a?(Hash)
+  return render_text_content(block) unless block.is_a?(Hash)
 
   type = block["type"].to_s
   case type
   when "text"
-    <<~HTML
-      <div class="block block-text">
-        <div class="block-header">
-          <span class="block-badge">Text</span>
-        </div>
-        <pre class="content">#{h(block["text"])}</pre>
-      </div>
-    HTML
+    render_text_block(block["text"])
   when "thinking"
     <<~HTML
       <div class="block block-thinking">
@@ -624,11 +693,17 @@ def render_content_block(block)
     HTML
   when "tool_result"
     content = block["content"]
-    content_text = case content
-                   when String then content
-                   when Array, Hash then pretty_json(content)
-                   else content.to_s
-                   end
+    content_html =
+      case content
+      when String
+        render_text_content(content)
+      when Array
+        content.map { |inner| render_content_block(inner) }.join
+      when Hash
+        %(<pre class="content">#{h(pretty_json(content))}</pre>)
+      else
+        %(<pre class="content">#{h(content)}</pre>)
+      end
     is_error = !!block["is_error"]
     error_class = is_error ? " block-tool-result-error" : ""
     badge = is_error ? "Tool result · error" : "Tool result"
@@ -640,7 +715,7 @@ def render_content_block(block)
           <span class="block-badge">#{h(badge)}</span>
           #{meta_html}
         </div>
-        <pre class="content">#{h(content_text)}</pre>
+        <div class="block-body">#{content_html}</div>
       </div>
     HTML
   when "image"
@@ -668,7 +743,7 @@ end
 def render_message_content(content)
   case content
   when String
-    %(<pre class="content">#{h(content)}</pre>)
+    render_text_content(content)
   when Array
     content.map { |block| render_content_block(block) }.join
   when nil
@@ -783,11 +858,28 @@ end
 def render_tools_summary(tools)
   return "" unless tools.is_a?(Array) && !tools.empty?
 
-  names = tools.filter_map { |t| t.is_a?(Hash) ? t["name"] : nil }
-  label = "#{tools.size} tool#{"s" unless tools.size == 1}"
-  label += ": #{names.join(", ")}" unless names.empty?
+  chips = tools.filter_map do |tool|
+    next unless tool.is_a?(Hash)
 
-  %(<p class="tools-summary"><strong>Tools</strong> · #{h(label)}</p>)
+    name = tool["name"].to_s
+    next if name.empty?
+
+    desc = tool["description"].to_s.gsub(/\s+/, " ").strip
+    title = desc.empty? ? name : "#{name} — #{desc[0, 240]}#{'…' if desc.length > 240}"
+    %(<span class="tool-chip mono" title="#{h(title)}">#{h(name)}</span>)
+  end.join
+
+  return "" if chips.empty?
+
+  <<~HTML
+    <div class="tools-panel">
+      <div class="tools-panel-header">
+        <span class="block-badge tools-badge">Tools</span>
+        <span class="tools-count">#{tools.size} available</span>
+      </div>
+      <div class="tools-chips">#{chips}</div>
+    </div>
+  HTML
 end
 
 def render_raw_json_details(label, value)
@@ -1691,6 +1783,84 @@ PAGE_CSS = <<~CSS
     color: #444;
     background: rgba(127, 127, 127, 0.14);
     border-color: rgba(127, 127, 127, 0.25);
+  }
+
+  .block-skill {
+    border-left-color: #ca8a04;
+    background: rgba(202, 138, 4, 0.06);
+  }
+  .block-skill .block-header { background: rgba(202, 138, 4, 0.1); }
+  .block-skill .block-badge {
+    color: #854d0e;
+    background: rgba(202, 138, 4, 0.16);
+    border-color: rgba(202, 138, 4, 0.4);
+  }
+  .skill-path {
+    margin: 0;
+    padding: 0.35rem 0.65rem 0;
+    font-size: 0.75rem;
+    color: #666;
+    word-break: break-all;
+  }
+  .block-skill > pre.content { padding: 0.45rem 0.65rem 0.55rem; }
+  .block-body { padding: 0; }
+  .block-body > pre.content { padding: 0.55rem 0.65rem; }
+  .block-body > .block { margin: 0.55rem; }
+  .block-body > .block:first-child { margin-top: 0.55rem; }
+
+  .tools-panel {
+    border: 1px solid rgba(37, 99, 235, 0.3);
+    border-radius: 6px;
+    margin: 0.75rem 0;
+    overflow: hidden;
+    background: rgba(37, 99, 235, 0.04);
+  }
+  .tools-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.65rem;
+    border-bottom: 1px solid rgba(37, 99, 235, 0.18);
+    background: rgba(37, 99, 235, 0.07);
+  }
+  .tools-badge {
+    color: #1e40af;
+    background: rgba(37, 99, 235, 0.14);
+    border-color: rgba(37, 99, 235, 0.35);
+  }
+  .tools-count {
+    font-size: 0.8rem;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+  }
+  .tools-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.55rem 0.65rem 0.65rem;
+  }
+  .tool-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(37, 99, 235, 0.3);
+    background: rgba(255, 255, 255, 0.55);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #1e3a8a;
+    line-height: 1.3;
+  }
+  @media (prefers-color-scheme: dark) {
+    .tools-count { color: #bbb; }
+    .tools-badge { color: #93c5fd; }
+    .tool-chip {
+      background: rgba(15, 23, 42, 0.45);
+      color: #93c5fd;
+      border-color: rgba(147, 197, 253, 0.35);
+    }
+    .block-skill .block-badge { color: #fde68a; }
+    .skill-path { color: #bbb; }
   }
 
   @media (prefers-color-scheme: dark) {
