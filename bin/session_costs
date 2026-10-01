@@ -18,6 +18,7 @@
 # Then open http://127.0.0.1:4890/
 
 require "cgi"
+require "digest"
 require "json"
 require "net/http"
 require "time"
@@ -369,6 +370,137 @@ def build_session_detail(session_id, rows)
 end
 
 # ---------------------------------------------------------------------------
+# Shared history (exact prior message / system dedupe)
+# ---------------------------------------------------------------------------
+
+def deep_sort_for_json(value)
+  case value
+  when Hash
+    value.keys.map(&:to_s).sort.each_with_object({}) do |key, out|
+      raw = value.key?(key) ? value[key] : value[key.to_sym]
+      out[key] = deep_sort_for_json(raw)
+    end
+  when Array
+    value.map { |item| deep_sort_for_json(item) }
+  else
+    value
+  end
+end
+
+def fingerprint(value)
+  Digest::SHA256.hexdigest(JSON.generate(deep_sort_for_json(value)))
+end
+
+def message_role(message)
+  message.is_a?(Hash) ? (message["role"] || "message").to_s : "message"
+end
+
+# Annotates each request with system_ref and message_segments so the UI can
+# replace exact copies of earlier content with links to the first occurrence.
+def annotate_shared_history!(detail)
+  return detail unless detail.is_a?(Hash)
+
+  requests = detail["requests"]
+  return detail unless requests.is_a?(Array)
+
+  canonical = {}
+
+  requests.each do |req|
+    body = req["req_body"]
+    req_index = req["index"]
+
+    if body.is_a?(Hash) && !body["system"].nil?
+      sys_fp = fingerprint(body["system"])
+      if canonical.key?(sys_fp)
+        src = canonical[sys_fp]
+        req["system_ref"] = { "from_req" => src["req"], "kind" => "system" }
+      else
+        canonical[sys_fp] = { "req" => req_index, "kind" => "system" }
+        req["system_ref"] = nil
+      end
+    else
+      req["system_ref"] = nil
+    end
+
+    messages = body.is_a?(Hash) ? body["messages"] : nil
+    unless messages.is_a?(Array)
+      req["message_segments"] = []
+      next
+    end
+
+    annotated = messages.each_with_index.map do |msg, msg_index|
+      fp = fingerprint(msg)
+      if canonical.key?(fp)
+        src = canonical[fp]
+        {
+          "ref" => true,
+          "index" => msg_index,
+          "message" => msg,
+          "role" => message_role(msg),
+          "from_req" => src["req"],
+          "from_index" => src["index"]
+        }
+      else
+        canonical[fp] = { "req" => req_index, "index" => msg_index, "kind" => "message" }
+        {
+          "ref" => false,
+          "index" => msg_index,
+          "message" => msg,
+          "role" => message_role(msg)
+        }
+      end
+    end
+
+    req["message_segments"] = collapse_message_ref_runs(annotated)
+  end
+
+  detail
+end
+
+def collapse_message_ref_runs(annotated)
+  segments = []
+  i = 0
+  while i < annotated.length
+    item = annotated[i]
+    unless item["ref"]
+      segments << {
+        "type" => "full",
+        "index" => item["index"],
+        "message" => item["message"],
+        "role" => item["role"]
+      }
+      i += 1
+      next
+    end
+
+    from_req = item["from_req"]
+    from_index = item["from_index"]
+    j = i + 1
+    expect = from_index + 1
+    while j < annotated.length
+      nxt = annotated[j]
+      break unless nxt["ref"] && nxt["from_req"] == from_req && nxt["from_index"] == expect
+
+      expect += 1
+      j += 1
+    end
+
+    run = annotated[i...j]
+    segments << {
+      "type" => "ref",
+      "from_req" => from_req,
+      "from_index" => from_index,
+      "count" => run.length,
+      "roles" => run.map { |r| r["role"] },
+      "messages" => run.map { |r| r["message"] },
+      "start_index" => item["index"]
+    }
+    i = j
+  end
+  segments
+end
+
+# ---------------------------------------------------------------------------
 # HTML helpers
 # ---------------------------------------------------------------------------
 
@@ -508,7 +640,7 @@ def render_message_content(content)
   end
 end
 
-def render_system_prompt(system)
+def render_system_prompt(system, req_index:)
   return "" if system.nil?
 
   body =
@@ -522,9 +654,90 @@ def render_system_prompt(system)
     end
 
   <<~HTML
-    <div class="msg">
+    <div class="msg" id="req-#{req_index}-system">
       <div class="msg-role">system</div>
       <div class="msg-body scrollable">#{body}</div>
+    </div>
+  HTML
+end
+
+def render_full_message(msg, req_index:, msg_index:)
+  return "" unless msg.is_a?(Hash)
+
+  <<~HTML
+    <div class="msg" id="req-#{req_index}-m-#{msg_index}">
+      <div class="msg-role">#{h(msg["role"] || "message")}</div>
+      <div class="msg-body scrollable">#{render_message_content(msg["content"])}</div>
+    </div>
+  HTML
+end
+
+def format_role_sequence(roles)
+  roles = Array(roles).map(&:to_s)
+  return "" if roles.empty?
+
+  if roles.length <= 5
+    roles.join(" → ")
+  else
+    "#{roles.first(2).join(" → ")} → … → #{roles.last(2).join(" → ")} (#{roles.length})"
+  end
+end
+
+def render_shared_history_chip(segment)
+  from_req = segment["from_req"]
+  from_index = segment["from_index"]
+  count = segment["count"]
+  roles = segment["roles"]
+  target_id =
+    if count == 1
+      "req-#{from_req}-m-#{from_index}"
+    else
+      "req-#{from_req}-m-#{from_index}"
+    end
+
+  label =
+    if count == 1
+      "Earlier in ##{from_req} · #{roles.first}"
+    else
+      "Earlier in ##{from_req} · #{count} messages (#{format_role_sequence(roles)})"
+    end
+
+  expanded = segment["messages"].map do |msg|
+    # Show-here copies don't need unique anchors; they are display-only.
+    <<~HTML
+      <div class="msg">
+        <div class="msg-role">#{h(message_role(msg))}</div>
+        <div class="msg-body scrollable">#{render_message_content(msg.is_a?(Hash) ? msg["content"] : msg)}</div>
+      </div>
+    HTML
+  end.join
+
+  <<~HTML
+    <div class="history-chip" data-target="#{h(target_id)}" data-source-req="#{from_req}">
+      <div class="history-chip-main">
+        <span class="history-chip-label">#{h(label)}</span>
+        <span class="history-chip-actions">
+          <button type="button" class="history-link" data-action="jump">Jump to source</button>
+          <button type="button" class="history-link" data-action="toggle">Show here</button>
+        </span>
+      </div>
+      <div class="history-chip-expand" hidden>
+        #{expanded}
+      </div>
+    </div>
+  HTML
+end
+
+def render_system_ref_chip(from_req)
+  target_id = "req-#{from_req}-system"
+  <<~HTML
+    <div class="history-chip" data-target="#{h(target_id)}" data-source-req="#{from_req}">
+      <div class="history-chip-main">
+        <span class="history-chip-label">Same system prompt as ##{from_req}</span>
+        <span class="history-chip-actions">
+          <button type="button" class="history-link" data-action="jump">Jump to source</button>
+        </span>
+      </div>
     </div>
   HTML
 end
@@ -559,6 +772,7 @@ end
 
 def render_request_body(req)
   body = req["req_body"]
+  req_index = req["index"]
   unless body.is_a?(Hash)
     return <<~HTML
       <p class="muted">No request body recorded.</p>
@@ -566,25 +780,35 @@ def render_request_body(req)
     HTML
   end
 
-  messages = body["messages"]
+  system_html =
+    if req["system_ref"]
+      render_system_ref_chip(req["system_ref"]["from_req"])
+    else
+      render_system_prompt(body["system"], req_index: req_index)
+    end
+
+  segments = req["message_segments"]
   message_html =
-    if messages.is_a?(Array)
-      messages.map do |msg|
+    if segments.is_a?(Array) && !segments.empty?
+      segments.map do |seg|
+        if seg["type"] == "ref"
+          render_shared_history_chip(seg)
+        else
+          render_full_message(seg["message"], req_index: req_index, msg_index: seg["index"])
+        end
+      end.join
+    elsif body["messages"].is_a?(Array)
+      body["messages"].each_with_index.map do |msg, msg_index|
         next unless msg.is_a?(Hash)
 
-        <<~HTML
-          <div class="msg">
-            <div class="msg-role">#{h(msg["role"] || "message")}</div>
-            <div class="msg-body scrollable">#{render_message_content(msg["content"])}</div>
-          </div>
-        HTML
+        render_full_message(msg, req_index: req_index, msg_index: msg_index)
       end.join
     else
       ""
     end
 
   <<~HTML
-    #{render_system_prompt(body["system"])}
+    #{system_html}
     #{message_html}
     #{render_tools_summary(body["tools"])}
     #{render_raw_json_details("Raw JSON", body)}
@@ -659,12 +883,13 @@ end
 def render_request_card(req, open_details:)
   open_attr = open_details ? " open" : ""
   model = req["model"].to_s.empty? ? "—" : req["model"]
+  req_index = req["index"]
 
   <<~HTML
-    <article class="req-card">
+    <article class="req-card" id="req-#{req_index}">
       <header class="req-card-header">
         <div class="req-card-title">
-          <span class="req-index">##{req["index"]}</span>
+          <span class="req-index">##{req_index}</span>
           <span class="mono time-cell">#{h(format_ts(req["time"]))}</span>
           <span class="mono model-cell" title="#{h(model)}">#{h(model)}</span>
         </div>
@@ -694,7 +919,7 @@ def render_request_card(req, open_details:)
         </div>
       </div>
 
-      <details class="section-details"#{open_attr}>
+      <details class="section-details request-section"#{open_attr}>
         <summary>Request</summary>
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
@@ -944,6 +1169,53 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
       <main>
         #{body_html}
       </main>
+      <script>
+      (function () {
+        function openRequestSection(el) {
+          var details = el && el.closest ? el.closest(".request-section") : null;
+          if (details) details.open = true;
+        }
+        function flash(el) {
+          if (!el) return;
+          el.classList.remove("flash");
+          void el.offsetWidth;
+          el.classList.add("flash");
+          setTimeout(function () { el.classList.remove("flash"); }, 1200);
+        }
+        document.addEventListener("click", function (e) {
+          var btn = e.target.closest("[data-action]");
+          if (!btn) return;
+          var chip = btn.closest(".history-chip");
+          if (!chip) return;
+          var action = btn.getAttribute("data-action");
+          if (action === "jump") {
+            e.preventDefault();
+            var targetId = chip.getAttribute("data-target");
+            var target = targetId ? document.getElementById(targetId) : null;
+            if (!target) return;
+            openRequestSection(target);
+            var card = target.closest(".req-card");
+            if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+            setTimeout(function () {
+              target.scrollIntoView({ behavior: "smooth", block: "center" });
+              flash(target);
+            }, 50);
+          } else if (action === "toggle") {
+            e.preventDefault();
+            var expand = chip.querySelector(".history-chip-expand");
+            if (!expand) return;
+            var open = expand.hasAttribute("hidden");
+            if (open) {
+              expand.removeAttribute("hidden");
+              btn.textContent = "Hide";
+            } else {
+              expand.setAttribute("hidden", "");
+              btn.textContent = "Show here";
+            }
+          }
+        });
+      })();
+      </script>
     </body>
     </html>
   HTML
@@ -1219,6 +1491,11 @@ PAGE_CSS = <<~CSS
     margin-bottom: 0.65rem;
     overflow: hidden;
   }
+  .msg.flash, .history-chip.flash {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    transition: outline-color 0.2s;
+  }
   .msg-role {
     font-size: 0.72rem;
     font-weight: 700;
@@ -1234,6 +1511,46 @@ PAGE_CSS = <<~CSS
     max-height: 28rem;
     overflow: auto;
   }
+
+  .history-chip {
+    border: 1px dashed rgba(37, 99, 235, 0.45);
+    border-radius: 6px;
+    margin-bottom: 0.65rem;
+    background: rgba(37, 99, 235, 0.04);
+    padding: 0.55rem 0.75rem;
+  }
+  .history-chip-main {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .history-chip-label {
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #1e3a8a;
+  }
+  @media (prefers-color-scheme: dark) {
+    .history-chip-label { color: #93c5fd; }
+  }
+  .history-chip-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  button.history-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #2563eb;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  button.history-link:hover { color: #1d4ed8; }
+  .history-chip-expand { margin-top: 0.65rem; }
+  .history-chip-expand[hidden] { display: none !important; }
 
   .block { margin-bottom: 0.65rem; }
   .block:last-child { margin-bottom: 0; }
@@ -1346,6 +1663,7 @@ server.mount_proc "/session" do |req, res|
       to_time: q[:to_time]
     )
     detail = build_session_detail(session_id, rows)
+    annotate_shared_history!(detail)
   rescue StandardError => e
     error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
     warn error
