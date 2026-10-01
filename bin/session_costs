@@ -962,6 +962,62 @@ def skill_load_chip(skills)
   end.join
 end
 
+# Human-typed prompts / slash commands that first appear in this request
+# (shared-history refs are skipped so earlier turns are not repeated).
+def request_human_inputs(req)
+  messages =
+    if req["message_segments"].is_a?(Array) && !req["message_segments"].empty?
+      req["message_segments"].filter_map do |seg|
+        next unless seg.is_a?(Hash) && seg["type"] == "full"
+
+        seg["message"]
+      end
+    else
+      body = req["req_body"]
+      body.is_a?(Hash) && body["messages"].is_a?(Array) ? body["messages"] : []
+    end
+
+  seen = {}
+  inputs = []
+  messages.each do |msg|
+    next unless msg.is_a?(Hash) && msg["role"].to_s == "user"
+
+    content = msg["content"]
+    texts =
+      case content
+      when String then [content]
+      when Array
+        content.filter_map { |b| b["text"] if b.is_a?(Hash) && b["type"].to_s == "text" }
+      else
+        []
+      end
+
+    texts.each do |text|
+      kind = classify_user_text(text)
+      next unless human_input_kind?(kind)
+
+      shown = kind == :user_command ? command_display_text(text) : text.to_s.strip
+      next if shown.empty?
+
+      key = shown
+      next if seen[key]
+
+      seen[key] = true
+      inputs << { "kind" => kind, "text" => shown }
+    end
+  end
+  inputs
+end
+
+def human_input_chip(inputs)
+  return "" if inputs.nil? || inputs.empty?
+
+  inputs.map do |input|
+    label = truncate(input["text"], 48)
+    %(<span class="human-input-chip" title="#{h(input["text"])}">#{h(label)}</span>)
+  end.join
+end
+
 def render_skill_load_block(raw)
   parsed = parse_skill_load(raw)
   path = parsed["path"]
@@ -1413,7 +1469,7 @@ def render_request_card(req, open_details:)
       </header>
 
       <details class="section-details request-section"#{open_attr}>
-        <summary>Request #{req_tok}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</summary>
+        <summary>Request #{req_tok}#{human_input_chip(request_human_inputs(req))}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</summary>
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
 
@@ -1992,11 +2048,11 @@ PAGE_CSS = <<~CSS
     transition: outline-color 0.2s;
   }
   .msg-user-input {
-    border-color: rgba(79, 70, 229, 0.35);
+    border-color: rgba(22, 163, 74, 0.4);
   }
   .msg-user-input > .msg-role {
-    background: rgba(79, 70, 229, 0.1);
-    color: #3730a3;
+    background: rgba(22, 163, 74, 0.12);
+    color: #166534;
   }
   .msg-role {
     display: flex;
@@ -2018,25 +2074,25 @@ PAGE_CSS = <<~CSS
     overflow: auto;
   }
 
-  /* Human-typed text: indigo accent, high-contrast body — distinct from
-     amber command-output and muted harness/reminder blocks. */
+  /* Human-typed text: green accent, readable body — distinct from amber
+     skill/command chrome and muted harness/reminder blocks. */
   .block-user-input {
-    border-left-color: #4f46e5;
-    border-color: rgba(79, 70, 229, 0.35);
-    background: rgba(79, 70, 229, 0.06);
+    border-left-color: #16a34a;
+    border-color: rgba(22, 163, 74, 0.35);
+    background: rgba(22, 163, 74, 0.07);
   }
-  .block-user-input .block-header { background: rgba(79, 70, 229, 0.1); }
+  .block-user-input .block-header { background: rgba(22, 163, 74, 0.12); }
   .block-user-input .block-badge {
-    color: #3730a3;
-    background: rgba(79, 70, 229, 0.12);
-    border-color: rgba(79, 70, 229, 0.35);
+    color: #166534;
+    background: rgba(22, 163, 74, 0.14);
+    border-color: rgba(22, 163, 74, 0.4);
   }
   .user-input-text {
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif !important;
     font-size: 0.98rem !important;
     font-weight: 500;
     line-height: 1.55;
-    color: #0f172a;
+    color: #14532d;
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -2080,9 +2136,9 @@ PAGE_CSS = <<~CSS
   }
 
   @media (prefers-color-scheme: dark) {
-    .msg-user-input > .msg-role { color: #c7d2fe; }
-    .block-user-input .block-badge { color: #a5b4fc; }
-    .user-input-text { color: #e2e8f0; }
+    .msg-user-input > .msg-role { color: #86efac; }
+    .block-user-input .block-badge { color: #86efac; }
+    .user-input-text { color: #bbf7d0; }
     .block-reminder .block-badge,
     .block-harness .block-badge { color: #ccc; }
     .block-reminder > pre.content,
@@ -2110,7 +2166,8 @@ PAGE_CSS = <<~CSS
   }
   .token-chip-est { color: #666; }
   .cache-hit-chip,
-  .skill-load-chip {
+  .skill-load-chip,
+  .human-input-chip {
     display: inline-flex;
     align-items: center;
     margin-left: 0.35rem;
@@ -2125,11 +2182,19 @@ PAGE_CSS = <<~CSS
     padding: 0.1rem 0.45rem;
     white-space: nowrap;
     line-height: 1.3;
+    max-width: 22em;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .skill-load-chip {
     color: #854d0e;
     background: rgba(202, 138, 4, 0.14);
     border-color: rgba(202, 138, 4, 0.4);
+  }
+  .human-input-chip {
+    color: #166534;
+    background: rgba(22, 163, 74, 0.14);
+    border-color: rgba(22, 163, 74, 0.4);
   }
   .block-header .token-chip,
   .tools-panel-header .token-chip,
@@ -2140,6 +2205,7 @@ PAGE_CSS = <<~CSS
     .token-chip-est { color: #bbb; }
     .cache-hit-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
     .skill-load-chip { color: #fde68a; background: rgba(202, 138, 4, 0.22); }
+    .human-input-chip { color: #86efac; background: rgba(22, 163, 74, 0.22); }
   }
 
   .history-chip {
