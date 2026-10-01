@@ -32,6 +32,7 @@ GREPTIME_DB = ENV.fetch("GREPTIMEDB_DATABASE", "jorm")
 
 DEFAULT_PER_PAGE = 10
 CONTENT_PREVIEW_LEN = 200
+UNKNOWN_SESSION_ID = "(unknown)"
 
 RANGE_PRESETS = {
   "1h" => 3600,
@@ -104,6 +105,37 @@ def format_cost(cost)
   format("$%.6f", cost)
 end
 
+def format_ms(ms)
+  return "—" if ms.nil?
+
+  ms = ms.to_f
+  return format("%.0f ms", ms) if ms < 1000
+
+  format("%.2f s", ms / 1000.0)
+end
+
+def to_f_or_nil(value)
+  return nil if value.nil? || value.to_s.empty?
+
+  Float(value)
+rescue ArgumentError, TypeError
+  nil
+end
+
+def to_i_or_nil(value)
+  return nil if value.nil? || value.to_s.empty?
+
+  Integer(value)
+rescue ArgumentError, TypeError
+  nil
+end
+
+def mean(values)
+  return nil if values.nil? || values.empty?
+
+  values.sum / values.size.to_f
+end
+
 # ---------------------------------------------------------------------------
 # Row parsing / session grouping
 # ---------------------------------------------------------------------------
@@ -154,14 +186,67 @@ rescue JSON::ParserError
   nil
 end
 
+def pretty_json(value)
+  JSON.pretty_generate(value)
+rescue StandardError
+  value.to_s
+end
+
+def extract_cost(resp_body)
+  cost = resp_body.is_a?(Hash) ? resp_body.dig("usage", "cost") : nil
+  cost.nil? ? nil : cost.to_f
+end
+
+def time_range_clauses(from_time, to_time, column: "r.created_at")
+  clauses = []
+  clauses << "#{column} >= #{sql_literal(from_time.utc.iso8601)}" if from_time
+  clauses << "#{column} <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+  clauses
+end
+
 def fetch_rows(from_time:, to_time:)
   clauses = ["r.path LIKE '/v1/messages%'"]
-  clauses << "r.created_at >= #{sql_literal(from_time.utc.iso8601)}" if from_time
-  clauses << "r.created_at <= #{sql_literal(to_time.utc.iso8601)}" if to_time
+  clauses.concat(time_range_clauses(from_time, to_time))
 
   sql = <<~SQL
     SELECT r.jorm_request_id, r.created_at AS req_time, r.headers, r.body AS req_body,
            resp.created_at AS resp_time, resp.body AS resp_body
+    FROM requests r
+    LEFT JOIN responses resp ON r.jorm_request_id = resp.jorm_request_id
+    WHERE #{clauses.join(" AND ")}
+    ORDER BY r.created_at ASC
+  SQL
+
+  sql_query(sql)
+end
+
+# GreptimeDB json_get_string needs a JSONPath. Hyphenated keys must be
+# quoted: $."x-claude-code-session-id" (bare $.x-claude-... returns NULL).
+SESSION_ID_JSON_PATH = '$."x-claude-code-session-id"'
+
+def session_id_clause(session_id)
+  extractor = "json_get_string(r.headers, #{sql_literal(SESSION_ID_JSON_PATH)})"
+  if session_id == UNKNOWN_SESSION_ID
+    "(#{extractor} IS NULL OR #{extractor} = '')"
+  else
+    "#{extractor} = #{sql_literal(session_id)}"
+  end
+end
+
+def fetch_session_rows(session_id:, from_time:, to_time:)
+  clauses = [
+    "r.path LIKE '/v1/messages%'",
+    session_id_clause(session_id)
+  ]
+  clauses.concat(time_range_clauses(from_time, to_time))
+
+  # model / token columns are denormalized onto responses in newer schemas;
+  # this query sticks to columns present on both old and new deployments and
+  # derives model from the request/response body in Ruby.
+  sql = <<~SQL
+    SELECT r.jorm_request_id, r.created_at AS req_time, r.path, r.body AS req_body,
+           resp.status, resp.body AS resp_body, resp.ttft_ms, resp.duration_ms,
+           resp.error
     FROM requests r
     LEFT JOIN responses resp ON r.jorm_request_id = resp.jorm_request_id
     WHERE #{clauses.join(" AND ")}
@@ -177,14 +262,13 @@ def group_sessions(rows)
   rows.each do |row|
     headers = parse_json_maybe(row["headers"]) || {}
     session_id = headers["x-claude-code-session-id"].to_s
-    session_id = "(unknown)" if session_id.empty?
+    session_id = UNKNOWN_SESSION_ID if session_id.empty?
 
     req_body = parse_json_maybe(row["req_body"])
     resp_body = parse_json_maybe(row["resp_body"])
 
     content = truncate(last_user_content(req_body))
-    cost = resp_body&.dig("usage", "cost")
-    cost = cost.nil? ? nil : cost.to_f
+    cost = extract_cost(resp_body)
 
     req_time = row["req_time"]
     resp_time = row["resp_time"]
@@ -216,8 +300,53 @@ def group_sessions(rows)
   sessions.values.sort_by { |s| -(s["last_message_at"] || 0) }
 end
 
+def build_session_detail(session_id, rows)
+  requests = rows.map.with_index(1) do |row, index|
+    req_body = parse_json_maybe(row["req_body"])
+    resp_body = parse_json_maybe(row["resp_body"])
+    cost = extract_cost(resp_body)
+    status = to_i_or_nil(row["status"])
+    error = row["error"]
+    error = nil if error.respond_to?(:empty?) && error.empty?
+    model = req_body.is_a?(Hash) ? req_body["model"].to_s : ""
+    model = resp_body["model"].to_s if model.empty? && resp_body.is_a?(Hash)
+
+    {
+      "index" => index,
+      "jorm_request_id" => row["jorm_request_id"].to_s,
+      "time" => row["req_time"],
+      "path" => row["path"].to_s,
+      "req_body" => req_body,
+      "req_body_raw" => row["req_body"],
+      "resp_body" => resp_body,
+      "resp_body_raw" => row["resp_body"],
+      "status" => status,
+      "error" => error,
+      "model" => model,
+      "cost" => cost,
+      "ttft_ms" => to_f_or_nil(row["ttft_ms"]),
+      "duration_ms" => to_f_or_nil(row["duration_ms"]),
+      "has_response" => !(row["resp_body"].nil? || row["resp_body"].to_s.empty?) || !status.nil?
+    }
+  end
+
+  durations = requests.filter_map { |r| r["duration_ms"] }
+  ttfts = requests.filter_map { |r| r["ttft_ms"] }
+  costs = requests.filter_map { |r| r["cost"] }
+
+  {
+    "session_id" => session_id,
+    "requests" => requests,
+    "request_count" => requests.size,
+    "total_cost" => costs.empty? ? nil : costs.sum,
+    "avg_duration_ms" => mean(durations),
+    "max_duration_ms" => durations.max,
+    "avg_ttft_ms" => mean(ttfts)
+  }
+end
+
 # ---------------------------------------------------------------------------
-# HTML
+# HTML helpers
 # ---------------------------------------------------------------------------
 
 def h(text)
@@ -239,6 +368,314 @@ def datetime_local_value(time)
   time.getlocal.strftime("%Y-%m-%dT%H:%M")
 end
 
+def cost_class(cost)
+  cost.nil? ? "cost-unknown" : ""
+end
+
+def ms_class(ms)
+  ms.nil? ? "cost-unknown" : ""
+end
+
+def short_session_id(session_id)
+  return UNKNOWN_SESSION_ID if session_id == UNKNOWN_SESSION_ID
+  return session_id if session_id.length <= 12
+
+  "#{session_id[0, 8]}…"
+end
+
+def list_params(range_preset:, from_raw:, to_raw:, per_page:, page: nil)
+  {
+    range: range_preset,
+    from: from_raw,
+    to: to_raw,
+    per_page: per_page.to_s,
+    page: page&.to_s
+  }
+end
+
+def parse_list_query(req)
+  range_preset = req.query["range"].to_s
+  range_preset = DEFAULT_RANGE unless RANGE_PRESETS.key?(range_preset) || range_preset.empty?
+  range_preset = DEFAULT_RANGE if range_preset.empty?
+  from_raw = req.query["from"].to_s
+  to_raw = req.query["to"].to_s
+  from_time, to_time, effective_preset = resolve_range(
+    preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw
+  )
+  range_preset = effective_preset if effective_preset
+  page = Integer(req.query["page"] || 1, exception: false) || 1
+  per_page = Integer(req.query["per_page"] || DEFAULT_PER_PAGE, exception: false) || DEFAULT_PER_PAGE
+  page = 1 if page < 1
+  per_page = DEFAULT_PER_PAGE if per_page < 1
+  per_page = 100 if per_page > 100
+
+  {
+    range_preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw,
+    from_time: from_time,
+    to_time: to_time,
+    page: page,
+    per_page: per_page
+  }
+end
+
+# ---------------------------------------------------------------------------
+# Content rendering (request / response bodies)
+# ---------------------------------------------------------------------------
+
+def render_content_block(block)
+  return %(<pre class="content">#{h(block)}</pre>) unless block.is_a?(Hash)
+
+  type = block["type"].to_s
+  case type
+  when "text"
+    %(<div class="block"><span class="block-label">text</span><pre class="content">#{h(block["text"])}</pre></div>)
+  when "thinking"
+    %(<div class="block"><span class="block-label">thinking</span><pre class="content">#{h(block["thinking"])}</pre></div>)
+  when "tool_use"
+    input = block["input"]
+    input_text = input.is_a?(String) ? input : pretty_json(input)
+    <<~HTML
+      <div class="block">
+        <span class="block-label">tool_use · #{h(block["name"])}</span>
+        <pre class="content">#{h(input_text)}</pre>
+      </div>
+    HTML
+  when "tool_result"
+    content = block["content"]
+    content_text = case content
+                   when String then content
+                   when Array, Hash then pretty_json(content)
+                   else content.to_s
+                   end
+    label = "tool_result"
+    label += " · error" if block["is_error"]
+    label += " · #{block["tool_use_id"]}" if block["tool_use_id"]
+    <<~HTML
+      <div class="block">
+        <span class="block-label">#{h(label)}</span>
+        <pre class="content">#{h(content_text)}</pre>
+      </div>
+    HTML
+  when "image"
+    %(<div class="block"><span class="block-label">image</span><pre class="content">#{h(pretty_json(block))}</pre></div>)
+  else
+    label = type.empty? ? "block" : type
+    %(<div class="block"><span class="block-label">#{h(label)}</span><pre class="content">#{h(pretty_json(block))}</pre></div>)
+  end
+end
+
+def render_message_content(content)
+  case content
+  when String
+    %(<pre class="content">#{h(content)}</pre>)
+  when Array
+    content.map { |block| render_content_block(block) }.join
+  when nil
+    %(<p class="muted">No content</p>)
+  else
+    %(<pre class="content">#{h(pretty_json(content))}</pre>)
+  end
+end
+
+def render_system_prompt(system)
+  return "" if system.nil?
+
+  body =
+    case system
+    when String
+      %(<pre class="content">#{h(system)}</pre>)
+    when Array
+      system.map { |block| render_content_block(block) }.join
+    else
+      %(<pre class="content">#{h(pretty_json(system))}</pre>)
+    end
+
+  <<~HTML
+    <div class="msg">
+      <div class="msg-role">system</div>
+      <div class="msg-body scrollable">#{body}</div>
+    </div>
+  HTML
+end
+
+def render_tools_summary(tools)
+  return "" unless tools.is_a?(Array) && !tools.empty?
+
+  names = tools.filter_map { |t| t.is_a?(Hash) ? t["name"] : nil }
+  label = "#{tools.size} tool#{"s" unless tools.size == 1}"
+  label += ": #{names.join(", ")}" unless names.empty?
+
+  %(<p class="tools-summary"><strong>Tools</strong> · #{h(label)}</p>)
+end
+
+def render_raw_json_details(label, value)
+  text =
+    if value.is_a?(Hash) || value.is_a?(Array)
+      pretty_json(value)
+    elsif value.nil? || value.to_s.empty?
+      "(empty)"
+    else
+      value.to_s
+    end
+
+  <<~HTML
+    <details class="raw-json">
+      <summary>#{h(label)}</summary>
+      <pre class="content scrollable">#{h(text)}</pre>
+    </details>
+  HTML
+end
+
+def render_request_body(req)
+  body = req["req_body"]
+  unless body.is_a?(Hash)
+    return <<~HTML
+      <p class="muted">No request body recorded.</p>
+      #{render_raw_json_details("Raw body", req["req_body_raw"])}
+    HTML
+  end
+
+  messages = body["messages"]
+  message_html =
+    if messages.is_a?(Array)
+      messages.map do |msg|
+        next unless msg.is_a?(Hash)
+
+        <<~HTML
+          <div class="msg">
+            <div class="msg-role">#{h(msg["role"] || "message")}</div>
+            <div class="msg-body scrollable">#{render_message_content(msg["content"])}</div>
+          </div>
+        HTML
+      end.join
+    else
+      ""
+    end
+
+  <<~HTML
+    #{render_system_prompt(body["system"])}
+    #{message_html}
+    #{render_tools_summary(body["tools"])}
+    #{render_raw_json_details("Raw JSON", body)}
+  HTML
+end
+
+def render_usage_line(usage, cost)
+  return "" unless usage.is_a?(Hash) || !cost.nil?
+
+  usage = {} unless usage.is_a?(Hash)
+  parts = []
+  parts << "input #{usage["input_tokens"]}" if usage.key?("input_tokens")
+  parts << "output #{usage["output_tokens"]}" if usage.key?("output_tokens")
+  parts << "cache read #{usage["cache_read_input_tokens"]}" if usage.key?("cache_read_input_tokens")
+  parts << "cache create #{usage["cache_creation_input_tokens"]}" if usage.key?("cache_creation_input_tokens")
+  parts << "cost #{format_cost(cost)}" unless cost.nil?
+  return "" if parts.empty?
+
+  %(<p class="usage-line"><strong>Usage</strong> · #{h(parts.join(" · "))}</p>)
+end
+
+def render_response_body(req)
+  body = req["resp_body"]
+  error = req["error"]
+
+  unless body.is_a?(Hash) || req["has_response"]
+    note = "No response recorded."
+    note += " #{error}" if error
+    return <<~HTML
+      <p class="muted">#{h(note)}</p>
+      #{render_raw_json_details("Raw body", req["resp_body_raw"]) if req["resp_body_raw"]}
+    HTML
+  end
+
+  unless body.is_a?(Hash)
+    return <<~HTML
+      <pre class="content scrollable">#{h(req["resp_body_raw"])}</pre>
+      #{%(<p class="error-text">#{h(error)}</p>) if error}
+    HTML
+  end
+
+  content_html = render_message_content(body["content"])
+  stop = body["stop_reason"]
+
+  <<~HTML
+    <div class="msg">
+      <div class="msg-role">assistant</div>
+      <div class="msg-body scrollable">#{content_html}</div>
+    </div>
+    #{%(<p class="stop-reason"><strong>Stop reason</strong> · #{h(stop)}</p>) if stop}
+    #{render_usage_line(body["usage"], req["cost"])}
+    #{%(<p class="error-text">#{h(error)}</p>) if error}
+    #{render_raw_json_details("Raw JSON", body)}
+  HTML
+end
+
+def status_pill(req)
+  error = req["error"]
+  status = req["status"]
+
+  if error
+    %(<span class="pill pill-error" title="#{h(error)}">Error</span>)
+  elsif status.nil?
+    %(<span class="pill pill-muted">No response</span>)
+  elsif status >= 400
+    %(<span class="pill pill-error">HTTP #{status}</span>)
+  else
+    %(<span class="pill pill-ok">OK</span>)
+  end
+end
+
+def render_request_card(req, open_details:)
+  open_attr = open_details ? " open" : ""
+  model = req["model"].to_s.empty? ? "—" : req["model"]
+
+  <<~HTML
+    <article class="req-card">
+      <header class="req-card-header">
+        <div class="req-card-title">
+          <span class="req-index">##{req["index"]}</span>
+          <span class="mono time-cell">#{h(format_ts(req["time"]))}</span>
+          <span class="mono model-cell" title="#{h(model)}">#{h(model)}</span>
+        </div>
+        #{status_pill(req)}
+      </header>
+
+      <div class="metrics" aria-label="Request metrics">
+        <div class="metric">
+          <span class="metric-label">Cost</span>
+          <span class="metric-value #{cost_class(req["cost"])}">#{h(format_cost(req["cost"]))}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Latency</span>
+          <span class="metric-value #{ms_class(req["duration_ms"])}">#{h(format_ms(req["duration_ms"]))}</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">TTFT</span>
+          <span class="metric-value #{ms_class(req["ttft_ms"])}">#{h(format_ms(req["ttft_ms"]))}</span>
+        </div>
+      </div>
+
+      <details class="section-details"#{open_attr}>
+        <summary>Request</summary>
+        <div class="section-body">#{render_request_body(req)}</div>
+      </details>
+
+      <details class="section-details"#{open_attr}>
+        <summary>Response</summary>
+        <div class="section-body">#{render_response_body(req)}</div>
+      </details>
+    </article>
+  HTML
+end
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
 def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, from_time:, to_time:, error: nil)
   total = sessions.size
   total_pages = [((total + per_page - 1) / per_page), 1].max
@@ -251,17 +688,17 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
   grand_total_cost = sessions.sum { |s| s["total_cost"] }
   grand_total_requests = sessions.sum { |s| s["requests"].size }
 
-  base_params = {
-    range: range_preset,
-    from: from_raw,
-    to: to_raw,
-    per_page: per_page.to_s
-  }
+  base_params = list_params(
+    range_preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw,
+    per_page: per_page
+  )
 
   prev_link = pager_link(base_params, page - 1, "← Prev", enabled: page > 1)
   next_link = pager_link(base_params, page + 1, "Next →", enabled: page < total_pages)
 
-  session_rows = slice.map { |s| render_session_row(s) }.join
+  session_rows = slice.map { |s| render_session_row(s, base_params.merge(page: page.to_s)) }.join
 
   preset_links = RANGE_PRESETS.keys.map do |key|
     cls = (range_preset == key && from_raw.to_s.empty? && to_raw.to_s.empty?) ? "active" : ""
@@ -284,6 +721,7 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
               <th>Last message</th>
               <th class="num">Requests</th>
               <th class="num">Total cost</th>
+              <th class="chevron-col" aria-hidden="true"></th>
             </tr>
           </thead>
           <tbody>
@@ -312,7 +750,7 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
         <h1>Claude Code session costs</h1>
         <p class="subtitle">
           Cost is read from OpenRouter's <code>usage.cost</code> field, grouped by Claude Code session.
-          Only meaningful when the upstream is OpenRouter.
+          Only meaningful when the upstream is OpenRouter. Click a session to see request and response detail.
         </p>
       </header>
 
@@ -371,47 +809,101 @@ def pager_link(base_params, target_page, label, enabled:)
   end
 end
 
-def render_session_row(s)
-  req_rows = s["requests"].map do |r|
-    <<~HTML
-      <tr>
-        <td class="mono time-cell">#{h(format_ts(r["time"]))}</td>
-        <td class="content-cell">#{h(r["content"])}</td>
-        <td class="num #{cost_class(r["cost"])}">#{h(format_cost(r["cost"]))}</td>
-      </tr>
-    HTML
-  end.join
-
+def render_session_row(s, list_params)
   request_count = s["requests"].size
+  href = "/session#{query_string(list_params.merge(id: s["session_id"]))}"
 
   <<~HTML
     <tr class="session-row">
-      <td class="mono session-id" title="#{h(s["session_id"])}">#{h(s["session_id"])}</td>
-      <td class="mono">#{h(format_ts(s["created_at"]))}</td>
-      <td class="mono">#{h(format_ts(s["last_message_at"]))}</td>
-      <td class="num">#{request_count}</td>
-      <td class="num #{cost_class(s["total_cost"])}">#{h(format_cost(s["total_cost"]))}</td>
-    </tr>
-    <tr class="detail-row">
-      <td colspan="5">
-        <details>
-          <summary>View #{request_count} request#{"s" unless request_count == 1}</summary>
-          <table class="inner-table">
-            <thead>
-              <tr><th>Time</th><th>Content (first 200 chars)</th><th class="num">Cost</th></tr>
-            </thead>
-            <tbody>
-              #{req_rows}
-            </tbody>
-          </table>
-        </details>
+      <td class="mono session-id" title="#{h(s["session_id"])}">
+        <a class="row-link" href="#{h(href)}">#{h(s["session_id"])}</a>
       </td>
+      <td class="mono"><a class="row-link" href="#{h(href)}">#{h(format_ts(s["created_at"]))}</a></td>
+      <td class="mono"><a class="row-link" href="#{h(href)}">#{h(format_ts(s["last_message_at"]))}</a></td>
+      <td class="num"><a class="row-link" href="#{h(href)}">#{request_count}</a></td>
+      <td class="num #{cost_class(s["total_cost"])}"><a class="row-link" href="#{h(href)}">#{h(format_cost(s["total_cost"]))}</a></td>
+      <td class="chevron-col"><a class="row-link chevron" href="#{h(href)}" aria-label="View session">›</a></td>
     </tr>
   HTML
 end
 
-def cost_class(cost)
-  cost.nil? ? "cost-unknown" : ""
+def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, page:, error: nil)
+  back_href = "/#{query_string(list_params(
+    range_preset: range_preset,
+    from_raw: from_raw,
+    to_raw: to_raw,
+    per_page: per_page,
+    page: page
+  ))}"
+
+  session_id = detail&.dig("session_id").to_s
+  title_id = short_session_id(session_id)
+  open_details = detail && detail["request_count"] == 1
+
+  body_html =
+    if error
+      render_error_state(error)
+    elsif detail.nil? || detail["request_count"].zero?
+      <<~HTML
+        <div class="state-panel">
+          <p class="state-title">Session not found</p>
+          <p class="state-hint">No requests match this session in the selected time range.</p>
+          <a href="#{h(back_href)}" class="btn btn-ghost">Back to sessions</a>
+        </div>
+      HTML
+    else
+      cards = detail["requests"].map { |req| render_request_card(req, open_details: open_details) }.join
+      <<~HTML
+        <section class="stats" aria-label="Session summary">
+          <div class="stat">
+            <span class="stat-value">#{detail["request_count"]}</span>
+            <span class="stat-label">Request#{"s" unless detail["request_count"] == 1}</span>
+          </div>
+          <div class="stat stat-primary">
+            <span class="stat-value #{cost_class(detail["total_cost"])}">#{h(format_cost(detail["total_cost"]))}</span>
+            <span class="stat-label">Total cost</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value #{ms_class(detail["avg_duration_ms"])}">#{h(format_ms(detail["avg_duration_ms"]))}</span>
+            <span class="stat-label">Avg latency</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value #{ms_class(detail["avg_ttft_ms"])}">#{h(format_ms(detail["avg_ttft_ms"]))}</span>
+            <span class="stat-label">Avg TTFT</span>
+          </div>
+        </section>
+
+        <div class="req-list">
+          #{cards}
+        </div>
+      HTML
+    end
+
+  <<~HTML
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Session #{h(title_id)} — jorm</title>
+      <style>#{PAGE_CSS}</style>
+    </head>
+    <body>
+      <p class="back-nav">
+        <a class="btn btn-ghost" href="#{h(back_href)}">← Back to sessions</a>
+      </p>
+
+      <header class="page-header">
+        <h1>Session</h1>
+        <p class="session-id-full mono">#{h(session_id.empty? ? UNKNOWN_SESSION_ID : session_id)}</p>
+      </header>
+
+      <main>
+        #{body_html}
+      </main>
+    </body>
+    </html>
+  HTML
 end
 
 def render_empty_state(filters_active:)
@@ -462,6 +954,14 @@ PAGE_CSS = <<~CSS
   .page-header { margin-bottom: 1.5rem; }
   h1 { font-size: 1.5rem; margin: 0 0 0.35rem; }
   .subtitle { color: #666; font-size: 0.9rem; margin: 0; max-width: 60em; }
+  .back-nav { margin: 0 0 1rem; }
+  .session-id-full {
+    margin: 0;
+    word-break: break-all;
+    color: #555;
+    font-size: 0.9rem;
+  }
+  @media (prefers-color-scheme: dark) { .session-id-full { color: #bbb; } }
 
   .stats { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
   .stat {
@@ -538,7 +1038,7 @@ PAGE_CSS = <<~CSS
   .btn[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
   table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { padding: 0.55rem 0.6rem; text-align: left; vertical-align: top; }
+  th, td { padding: 0.55rem 0.6rem; text-align: left; vertical-align: middle; }
   thead th {
     font-size: 0.75rem;
     text-transform: uppercase;
@@ -548,23 +1048,23 @@ PAGE_CSS = <<~CSS
   }
   .session-row td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); font-weight: 500; }
   .session-row:hover td { background: rgba(127, 127, 127, 0.06); }
-  .detail-row td {
-    padding-top: 0;
-    padding-bottom: 0.9rem;
-    border-bottom: 1px solid rgba(127, 127, 127, 0.3);
-  }
   .session-id { max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chevron-col { width: 1.5rem; text-align: right; color: #999; }
+  a.row-link {
+    color: inherit;
+    text-decoration: none;
+    display: block;
+  }
+  td.session-id a.row-link { color: #2563eb; }
+  td.session-id a.row-link:hover { text-decoration: underline; }
+  a.chevron { font-size: 1.25rem; line-height: 1; color: #999; }
 
-  .inner-table { margin-top: 0.6rem; font-size: 0.85rem; }
-  .inner-table th { border-bottom: 1px solid rgba(127, 127, 127, 0.25); }
-  .inner-table td { border-bottom: 1px solid rgba(127, 127, 127, 0.12); }
   .time-cell { white-space: nowrap; }
-  .content-cell { max-width: 42em; word-break: break-word; color: #444; }
-  @media (prefers-color-scheme: dark) { .content-cell { color: #ccc; } }
-
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cost-unknown { color: #999; }
+  .muted { color: #666; font-size: 0.9rem; }
+  .error-text { color: #dc2626; font-size: 0.88rem; margin: 0.5rem 0 0; }
 
   details summary {
     cursor: pointer;
@@ -576,6 +1076,144 @@ PAGE_CSS = <<~CSS
   details summary::-webkit-details-marker { display: none; }
   details summary::before { content: "▸ "; }
   details[open] summary::before { content: "▾ "; }
+
+  .req-list { display: flex; flex-direction: column; gap: 1rem; }
+  .req-card {
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    border-radius: 8px;
+    padding: 0.9rem 1rem 1rem;
+  }
+  .req-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .req-card-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.85rem;
+    align-items: baseline;
+  }
+  .req-index { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .model-cell {
+    max-width: 28em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #555;
+  }
+  @media (prefers-color-scheme: dark) { .model-cell { color: #bbb; } }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+  }
+  .metric {
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .metric-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #666;
+  }
+  .metric-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .pill-ok {
+    color: #166534;
+    background: rgba(22, 163, 74, 0.12);
+    border-color: rgba(22, 163, 74, 0.35);
+  }
+  .pill-error {
+    color: #991b1b;
+    background: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.35);
+  }
+  .pill-muted {
+    color: #666;
+    background: rgba(127, 127, 127, 0.12);
+    border-color: rgba(127, 127, 127, 0.3);
+  }
+  @media (prefers-color-scheme: dark) {
+    .pill-ok { color: #86efac; }
+    .pill-error { color: #fca5a5; }
+  }
+
+  .section-details { margin-top: 0.55rem; }
+  .section-details > summary { font-size: 0.92rem; font-weight: 600; }
+  .section-body { margin-top: 0.65rem; }
+
+  .msg {
+    border: 1px solid rgba(127, 127, 127, 0.2);
+    border-radius: 6px;
+    margin-bottom: 0.65rem;
+    overflow: hidden;
+  }
+  .msg-role {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.35rem 0.65rem;
+    background: rgba(127, 127, 127, 0.1);
+    color: #555;
+  }
+  @media (prefers-color-scheme: dark) { .msg-role { color: #bbb; } }
+  .msg-body { padding: 0.55rem 0.65rem; }
+  .scrollable {
+    max-height: 28rem;
+    overflow: auto;
+  }
+
+  .block { margin-bottom: 0.65rem; }
+  .block:last-child { margin-bottom: 0; }
+  .block-label {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #666;
+    margin-bottom: 0.25rem;
+  }
+  pre.content {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .tools-summary, .usage-line, .stop-reason {
+    font-size: 0.85rem;
+    margin: 0.5rem 0;
+  }
+  .raw-json { margin-top: 0.75rem; }
+  .raw-json > summary { font-size: 0.82rem; }
 
   .state-panel {
     text-align: center;
@@ -604,6 +1242,8 @@ PAGE_CSS = <<~CSS
     .field-narrow input { width: 100%; }
     .field-actions { flex-direction: column; }
     .pager { flex-direction: column; gap: 0.75rem; align-items: stretch; text-align: center; }
+    .metrics { grid-template-columns: 1fr; }
+    .req-card-header { flex-direction: column; align-items: stretch; }
   }
 CSS
 
@@ -619,27 +1259,12 @@ server = WEBrick::HTTPServer.new(
 )
 
 server.mount_proc "/" do |req, res|
-  range_preset = req.query["range"].to_s
-  range_preset = DEFAULT_RANGE unless RANGE_PRESETS.key?(range_preset) || range_preset.empty?
-  range_preset = DEFAULT_RANGE if range_preset.empty?
-  from_raw = req.query["from"].to_s
-  to_raw = req.query["to"].to_s
-  from_time, to_time, effective_preset = resolve_range(
-    preset: range_preset,
-    from_raw: from_raw,
-    to_raw: to_raw
-  )
-  range_preset = effective_preset if effective_preset
-  page = Integer(req.query["page"] || 1, exception: false) || 1
-  per_page = Integer(req.query["per_page"] || DEFAULT_PER_PAGE, exception: false) || DEFAULT_PER_PAGE
-  page = 1 if page < 1
-  per_page = DEFAULT_PER_PAGE if per_page < 1
-  per_page = 100 if per_page > 100
+  q = parse_list_query(req)
 
   sessions = []
   error = nil
   begin
-    rows = fetch_rows(from_time: from_time, to_time: to_time)
+    rows = fetch_rows(from_time: q[:from_time], to_time: q[:to_time])
     sessions = group_sessions(rows)
   rescue StandardError => e
     error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
@@ -650,13 +1275,46 @@ server.mount_proc "/" do |req, res|
   res["Content-Type"] = "text/html; charset=utf-8"
   res.body = render_page(
     sessions: sessions,
-    page: page,
-    per_page: per_page,
-    range_preset: range_preset,
-    from_raw: from_raw,
-    to_raw: to_raw,
-    from_time: from_time,
-    to_time: to_time,
+    page: q[:page],
+    per_page: q[:per_page],
+    range_preset: q[:range_preset],
+    from_raw: q[:from_raw],
+    to_raw: q[:to_raw],
+    from_time: q[:from_time],
+    to_time: q[:to_time],
+    error: error
+  )
+end
+
+server.mount_proc "/session" do |req, res|
+  q = parse_list_query(req)
+  session_id = req.query["id"].to_s
+  session_id = UNKNOWN_SESSION_ID if session_id.empty?
+
+  detail = nil
+  error = nil
+  begin
+    rows = fetch_session_rows(
+      session_id: session_id,
+      from_time: q[:from_time],
+      to_time: q[:to_time]
+    )
+    detail = build_session_detail(session_id, rows)
+  rescue StandardError => e
+    error = "Failed to query GreptimeDB: #{e.class}: #{e.message}"
+    warn error
+    detail = { "session_id" => session_id, "requests" => [], "request_count" => 0 }
+  end
+
+  res.status = 200
+  res["Content-Type"] = "text/html; charset=utf-8"
+  res.body = render_session_page(
+    detail: detail,
+    range_preset: q[:range_preset],
+    from_raw: q[:from_raw],
+    to_raw: q[:to_raw],
+    per_page: q[:per_page],
+    page: q[:page],
     error: error
   )
 end
