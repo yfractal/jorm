@@ -44,9 +44,10 @@ RSpec.describe Jorm::PerformanceMetrics do
   end
 
   describe ".think_effort" do
-    it "reads reasoning_effort, nested reasoning.effort, and thinking variants" do
+    it "reads reasoning_effort, nested effort fields, and thinking variants" do
       expect(described_class.think_effort({ "reasoning_effort" => "high" })).to eq("high")
       expect(described_class.think_effort({ "reasoning" => { "effort" => "low" } })).to eq("low")
+      expect(described_class.think_effort({ "output_config" => { "effort" => "medium" } })).to eq("medium")
       expect(described_class.think_effort({ "thinking" => false })).to eq("disabled")
       expect(described_class.think_effort({ "thinking" => true })).to eq("enabled")
       expect(described_class.think_effort({ "thinking" => { "type" => "disabled" } })).to eq("disabled")

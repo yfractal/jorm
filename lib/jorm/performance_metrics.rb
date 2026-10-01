@@ -35,12 +35,8 @@ module Jorm
       body = coerce_hash(req_body)
       return "(none)" unless body.is_a?(Hash)
 
-      if (effort = body["reasoning_effort"])
-        return effort.to_s
-      end
-      if (effort = body.dig("reasoning", "effort"))
-        return effort.to_s
-      end
+      effort = body["reasoning_effort"] || body.dig("reasoning", "effort") || body.dig("output_config", "effort")
+      return effort.to_s if effort
 
       thinking = body["thinking"]
       case thinking
