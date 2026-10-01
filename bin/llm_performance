@@ -134,6 +134,27 @@ def resolve_range(preset:, from_raw:, to_raw:)
   [Time.now.utc - seconds, Time.now.utc, preset]
 end
 
+# Metrics-chart window from drag-zoom (m_from / m_to). Falls back to the
+# page range when unset.
+def resolve_metrics_range(from_raw:, to_raw:, page_from:, page_to:)
+  from_time = parse_time_param(from_raw)
+  to_time = parse_time_param(to_raw)
+  return [page_from, page_to] unless from_time || to_time
+
+  [from_time || page_from, to_time || page_to]
+end
+
+def filter_rows_by_time(rows, from_time, to_time)
+  rows.select do |row|
+    t = row["created_at"]
+    next false unless t
+    next false if from_time && t < from_time
+    next false if to_time && t > to_time
+
+    true
+  end
+end
+
 def fetch_rows(from_time:, to_time:)
   return fetch_demo_rows(from_time: from_time, to_time: to_time) if DEMO_MODE
 
@@ -421,6 +442,8 @@ def build_per_model_timeseries(rows, from_time, to_time)
   {
     "bucket_seconds" => bucket_seconds,
     "labels" => keys.map { |t| format_bucket_label(t, bucket_seconds) },
+    "timestamps" => keys.map { |t| t.getlocal.strftime("%Y-%m-%dT%H:%M") },
+    "timestamp_ends" => keys.map { |t| (t + bucket_seconds).getlocal.strftime("%Y-%m-%dT%H:%M") },
     "series" => series
   }
 end
@@ -941,9 +964,20 @@ PAGE_CSS = <<~CSS
     width: 100%;
     height: 280px;
     margin-bottom: 1rem;
+    cursor: crosshair;
   }
   .chart-wrap:last-child { margin-bottom: 0.5rem; }
   .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+  .metrics-zoom-hint {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    font-size: 0.82rem;
+    color: #666;
+    margin: 0 0 0.75rem;
+  }
+  .metrics-zoom-hint strong { color: inherit; font-weight: 600; }
   .chart-title {
     font-size: 1.05rem;
     font-weight: 700;
@@ -1035,7 +1069,9 @@ CSS
 def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_model:,
                 error_breakdown:, failures:,
                 range_preset:, from_raw:, to_raw:, from_time:, to_time:, model_filter:,
-                available_models:, sort_key:, sort_dir:, error: nil)
+                available_models:, sort_key:, sort_dir:,
+                metrics_from_raw:, metrics_to_raw:, metrics_from:, metrics_to:,
+                model_timeseries:, error: nil)
   filters_active = !model_filter.to_s.empty? || !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
                    (range_preset && range_preset != DEFAULT_RANGE)
 
@@ -1046,7 +1082,9 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
     model: model_filter,
     sort: sort_key,
     dir: sort_dir,
-    expand: expand_model
+    expand: expand_model,
+    m_from: metrics_from_raw,
+    m_to: metrics_to_raw
   }
 
   body_html =
@@ -1066,9 +1104,11 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
         base_params: base_params,
         sort_key: sort_key,
         sort_dir: sort_dir,
-        rows: rows,
-        from_time: from_time,
-        to_time: to_time
+        model_timeseries: model_timeseries,
+        metrics_from_raw: metrics_from_raw,
+        metrics_to_raw: metrics_to_raw,
+        metrics_from: metrics_from,
+        metrics_to: metrics_to
       )
     end
 
@@ -1093,6 +1133,8 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
       <title>LLM performance — jorm</title>
       <style>#{PAGE_CSS}</style>
       <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
     </head>
     <body>
       <header class="page-header">
@@ -1128,6 +1170,8 @@ def render_page(rows:, summary:, buckets_info:, models:, effort_rows:, expand_mo
         <input type="hidden" name="sort" value="#{h(sort_key)}">
         <input type="hidden" name="dir" value="#{h(sort_dir)}">
         #{%(<input type="hidden" name="expand" value="#{h(expand_model)}">) unless expand_model.to_s.empty?}
+        #{%(<input type="hidden" name="m_from" value="#{h(metrics_from_raw)}">) unless metrics_from_raw.to_s.empty?}
+        #{%(<input type="hidden" name="m_to" value="#{h(metrics_to_raw)}">) unless metrics_to_raw.to_s.empty?}
         <div class="field field-actions">
           <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
@@ -1144,9 +1188,9 @@ end
 
 def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_model:,
                      error_breakdown:, failures:,
-                     base_params:, sort_key:, sort_dir:, rows:, from_time:, to_time:)
+                     base_params:, sort_key:, sort_dir:, model_timeseries:,
+                     metrics_from_raw:, metrics_to_raw:, metrics_from:, metrics_to:)
   buckets = buckets_info["buckets"]
-  model_timeseries = build_per_model_timeseries(rows, from_time, to_time)
 
   traffic_svg = svg_bar_chart(buckets, value_key: "requests", error_key: "errors")
   latency_svg = svg_line_chart(
@@ -1172,6 +1216,17 @@ def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_mode
     ]
   )
   tokens_svg = svg_stacked_token_chart(buckets)
+
+  zoomed = !(metrics_from_raw.to_s.empty? && metrics_to_raw.to_s.empty?)
+  reset_href = query_string(base_params.merge(m_from: nil, m_to: nil))
+  zoom_hint = <<~HTML
+    <div class="metrics-zoom-hint">
+      <span><strong>Drag</strong> on a chart to select a time range · <strong>double-click</strong> to reset</span>
+      #{if zoomed
+          %(<a class="btn btn-ghost" href="/#{h(reset_href)}">Reset metrics zoom</a>)
+        end}
+    </div>
+  HTML
 
   <<~HTML
     <section class="stats" aria-label="Summary">
@@ -1212,8 +1267,9 @@ def render_dashboard(summary:, buckets_info:, models:, effort_rows:, expand_mode
     <div class="grid">
       <section class="panel panel-full">
         <h2>Model Performance Metrics</h2>
-        <p class="panel-hint">One line per model over time · hover for exact tok/s / TTFT · table below for totals and think-effort</p>
-        #{render_per_model_chart(model_timeseries)}
+        <p class="panel-hint">One line per model over time · drag to zoom like Datadog · table uses the page range</p>
+        #{zoom_hint}
+        #{render_per_model_chart(model_timeseries, base_params: base_params)}
         #{render_model_table(
           models,
           effort_rows: effort_rows,
@@ -1329,12 +1385,23 @@ def short_model_label(model)
   "#{name[0, 25]}…"
 end
 
-def render_per_model_chart(timeseries)
+def render_per_model_chart(timeseries, base_params:)
   series = timeseries["series"] || []
   return %(<p class="muted">No model data.</p>) if series.empty? || timeseries["labels"].empty?
 
   payload = {
     labels: timeseries["labels"],
+    timestamps: timeseries["timestamps"],
+    timestampEnds: timeseries["timestamp_ends"],
+    pageParams: {
+      "range" => base_params[:range].to_s,
+      "from" => base_params[:from].to_s,
+      "to" => base_params[:to].to_s,
+      "model" => base_params[:model].to_s,
+      "sort" => base_params[:sort].to_s,
+      "dir" => base_params[:dir].to_s,
+      "expand" => base_params[:expand].to_s
+    }.reject { |_, v| v.nil? || v.empty? },
     series: series.map do |s|
       {
         name: s["name"],
@@ -1366,6 +1433,32 @@ def render_per_model_chart(timeseries)
         };
         const fmtTps = (v) => (v == null || Number.isNaN(v) ? "n/a" : v.toFixed(1) + " tok/s");
 
+        const navigateMetricsRange = (from, to) => {
+          const params = new URLSearchParams();
+          Object.entries(data.pageParams || {}).forEach(([k, v]) => {
+            if (v != null && v !== "") params.set(k, v);
+          });
+          if (from) params.set("m_from", from);
+          else params.delete("m_from");
+          if (to) params.set("m_to", to);
+          else params.delete("m_to");
+          const qs = params.toString();
+          window.location.search = qs ? ("?" + qs) : "";
+        };
+
+        const applyBrush = (chart) => {
+          const x = chart.scales.x;
+          if (!x || !data.timestamps || data.timestamps.length === 0) return;
+          let i0 = Math.floor(Math.min(x.min, x.max));
+          let i1 = Math.ceil(Math.max(x.min, x.max));
+          i0 = Math.max(0, i0);
+          i1 = Math.min(data.timestamps.length - 1, i1);
+          if (i1 <= i0) i1 = Math.min(data.timestamps.length - 1, i0 + 1);
+          navigateMetricsRange(data.timestamps[i0], data.timestampEnds[i1]);
+        };
+
+        const resetBrush = () => navigateMetricsRange(null, null);
+
         const lineDatasets = (valueKey) => data.series.map((s) => ({
           label: s.label,
           data: s[valueKey],
@@ -1395,6 +1488,21 @@ def render_per_model_chart(timeseries)
                   return name + ": " + tooltipFmt(item.parsed.y);
                 }
               }
+            },
+            zoom: {
+              zoom: {
+                wheel: { enabled: false },
+                pinch: { enabled: false },
+                mode: "x",
+                drag: {
+                  enabled: true,
+                  backgroundColor: "rgba(37, 99, 235, 0.15)",
+                  borderColor: "rgba(37, 99, 235, 0.55)",
+                  borderWidth: 1
+                },
+                onZoomComplete: ({ chart }) => applyBrush(chart)
+              },
+              limits: { x: { minRange: 1 } }
             }
           },
           scales: {
@@ -1411,6 +1519,14 @@ def render_per_model_chart(timeseries)
           }
         });
 
+        const bindReset = (canvas) => {
+          if (!canvas) return;
+          canvas.addEventListener("dblclick", (e) => {
+            e.preventDefault();
+            resetBrush();
+          });
+        };
+
         const tpsEl = document.getElementById("per-model-tps-chart");
         if (tpsEl) {
           new Chart(tpsEl, {
@@ -1418,6 +1534,7 @@ def render_per_model_chart(timeseries)
             data: { labels: data.labels, datasets: lineDatasets("tokensPerSec") },
             options: commonOptions(fmtTps, "Tok/s", (v) => Number(v).toFixed(0))
           });
+          bindReset(tpsEl);
         }
 
         const ttftEl = document.getElementById("per-model-ttft-chart");
@@ -1427,6 +1544,7 @@ def render_per_model_chart(timeseries)
             data: { labels: data.labels, datasets: lineDatasets("ttftSeconds") },
             options: commonOptions(fmtTtft, "TTFT p50", fmtTtft)
           });
+          bindReset(ttftEl);
         }
       })();
     </script>
@@ -1560,6 +1678,8 @@ server.mount_proc "/" do |req, res|
   model_filter = req.query["model"].to_s
   sort_key, sort_dir = normalize_model_sort(req.query["sort"], req.query["dir"])
   expand_model = req.query["expand"].to_s
+  metrics_from_raw = req.query["m_from"].to_s
+  metrics_to_raw = req.query["m_to"].to_s
 
   from_time, to_time, effective_preset = resolve_range(
     preset: range_preset,
@@ -1568,19 +1688,32 @@ server.mount_proc "/" do |req, res|
   )
   range_preset = effective_preset if effective_preset
 
-  rows = []
+  metrics_from, metrics_to = resolve_metrics_range(
+    from_raw: metrics_from_raw,
+    to_raw: metrics_to_raw,
+    page_from: from_time,
+    page_to: to_time
+  )
+
+  fetch_from = [from_time, metrics_from].compact.min
+  fetch_to = [to_time, metrics_to].compact.max
+
+  all_rows = []
   all_models = []
   error = nil
   begin
-    raw = fetch_rows(from_time: from_time, to_time: to_time)
-    rows = raw.map { |r| normalize_row(r) }
-    all_models = available_models(rows)
-    rows = rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
+    raw = fetch_rows(from_time: fetch_from, to_time: fetch_to)
+    all_rows = raw.map { |r| normalize_row(r) }
+    all_models = available_models(all_rows)
+    all_rows = all_rows.select { |r| r["model"] == model_filter } unless model_filter.empty?
   rescue StandardError => e
     source = DEMO_MODE ? "demo fixture" : "GreptimeDB"
     error = "Failed to load #{source}: #{e.class}: #{e.message}"
     warn error
   end
+
+  rows = filter_rows_by_time(all_rows, from_time, to_time)
+  metrics_rows = filter_rows_by_time(all_rows, metrics_from, metrics_to)
 
   summary = build_summary(rows)
   buckets_info = build_buckets(rows, from_time, to_time)
@@ -1589,6 +1722,7 @@ server.mount_proc "/" do |req, res|
   expand_model = "" unless models.any? { |m| m["model"] == expand_model }
   error_breakdown = build_error_breakdown(rows)
   failures = recent_failures(rows)
+  model_timeseries = build_per_model_timeseries(metrics_rows, metrics_from, metrics_to)
 
   res.status = 200
   res["Content-Type"] = "text/html; charset=utf-8"
@@ -1610,6 +1744,11 @@ server.mount_proc "/" do |req, res|
     available_models: all_models,
     sort_key: sort_key,
     sort_dir: sort_dir,
+    metrics_from_raw: metrics_from_raw,
+    metrics_to_raw: metrics_to_raw,
+    metrics_from: metrics_from,
+    metrics_to: metrics_to,
+    model_timeseries: model_timeseries,
     error: error
   )
 end
