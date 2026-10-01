@@ -629,6 +629,38 @@ def skill_load_pattern
   /x
 end
 
+# Classify plain text that appears inside a user message. Claude Code packs
+# reminders, slash-commands, and skill payloads into role=user alongside the
+# actual typed prompt — we want the typed prompt to stand out.
+def classify_user_text(text)
+  stripped = text.to_s.strip
+  return :empty if stripped.empty?
+  return :skill if skill_load_only?(text) || stripped.include?("Base directory for this skill:")
+  return :system_reminder if stripped.start_with?("<system-reminder>") ||
+                             stripped.match?(/\A\s*<system-reminder>/)
+  if stripped.match?(%r{\A\s*</?(?:command-name|command-message|command-args|local-command-stdout|local-command-stderr)\b}i) ||
+     stripped.match?(%r{<(?:command-name|local-command-stdout)\b}i)
+    return :command
+  end
+
+  :user_input
+end
+
+def user_message_has_input?(content)
+  case content
+  when String
+    classify_user_text(content) == :user_input
+  when Array
+    content.any? do |block|
+      next false unless block.is_a?(Hash) && block["type"].to_s == "text"
+
+      classify_user_text(block["text"]) == :user_input
+    end
+  else
+    false
+  end
+end
+
 def render_text_content(text)
   text = text.to_s
   return %(<pre class="content"></pre>) if text.empty?
@@ -654,10 +686,64 @@ def skill_load_only?(text)
   remainder.strip.empty? && text.to_s.match?(skill_load_pattern)
 end
 
-def render_text_block(text)
+def render_meta_text_block(text, kind:)
+  case kind
+  when :system_reminder
+    badge = "System reminder"
+    css = "block-reminder"
+  when :command
+    badge = "Command"
+    css = "block-command"
+    # Prefer a short label from <command-name>/foo</command-name> when present.
+    if (m = text.to_s.match(%r{<command-name>\s*([^<]+?)\s*</command-name>}i))
+      badge = "Command · #{m[1].strip}"
+    elsif (m = text.to_s.match(%r{<local-command-stdout>}i))
+      badge = "Command output"
+    end
+  else
+    badge = "Text"
+    css = "block-text"
+  end
+
+  <<~HTML
+    <div class="block #{css}">
+      <div class="block-header">
+        <span class="block-badge">#{h(badge)}</span>
+        #{token_chip(estimate_tokens(text))}
+      </div>
+      <pre class="content">#{h(text)}</pre>
+    </div>
+  HTML
+end
+
+def render_user_input_block(text)
+  <<~HTML
+    <div class="block block-user-input">
+      <div class="block-header">
+        <span class="block-badge">User input</span>
+        #{token_chip(estimate_tokens(text))}
+      </div>
+      <pre class="content user-input-text">#{h(text)}</pre>
+    </div>
+  HTML
+end
+
+def render_text_block(text, role: nil)
   text = text.to_s
   if skill_load_only?(text)
     return render_text_content(text)
+  end
+
+  if role.to_s == "user"
+    kind = classify_user_text(text)
+    case kind
+    when :user_input
+      return render_user_input_block(text)
+    when :system_reminder, :command
+      return render_meta_text_block(text, kind: kind)
+    when :skill
+      return render_text_content(text)
+    end
   end
 
   inner = render_text_content(text)
@@ -700,13 +786,13 @@ def render_skill_load_block(raw)
   HTML
 end
 
-def render_content_block(block)
+def render_content_block(block, role: nil)
   return render_text_content(block) unless block.is_a?(Hash)
 
   type = block["type"].to_s
   case type
   when "text"
-    render_text_block(block["text"])
+    render_text_block(block["text"], role: role)
   when "thinking"
     thinking = block["thinking"]
     <<~HTML
@@ -740,7 +826,7 @@ def render_content_block(block)
       when String
         render_text_content(content)
       when Array
-        content.map { |inner| render_content_block(inner) }.join
+        content.map { |inner| render_content_block(inner, role: role) }.join
       when Hash
         %(<pre class="content">#{h(pretty_json(content))}</pre>)
       else
@@ -785,12 +871,20 @@ def render_content_block(block)
   end
 end
 
-def render_message_content(content)
+def render_message_content(content, role: nil)
   case content
   when String
+    if role.to_s == "user"
+      kind = classify_user_text(content)
+      case kind
+      when :user_input then return render_user_input_block(content)
+      when :system_reminder, :command then return render_meta_text_block(content, kind: kind)
+      when :skill then return render_text_content(content)
+      end
+    end
     render_text_content(content)
   when Array
-    content.map { |block| render_content_block(block) }.join
+    content.map { |block| render_content_block(block, role: role) }.join
   when nil
     %(<p class="muted">No content</p>)
   else
@@ -825,13 +919,18 @@ end
 def render_full_message(msg, req_index:, msg_index:)
   return "" unless msg.is_a?(Hash)
 
+  role = (msg["role"] || "message").to_s
+  has_input = role == "user" && user_message_has_input?(msg["content"])
+  msg_class = has_input ? "msg msg-user-input" : "msg"
+  role_label = has_input ? "user · input" : role
+
   <<~HTML
-    <div class="msg" id="req-#{req_index}-m-#{msg_index}">
+    <div class="#{msg_class}" id="req-#{req_index}-m-#{msg_index}">
       <div class="msg-role">
-        <span>#{h(msg["role"] || "message")}</span>
+        <span>#{h(role_label)}</span>
         #{token_chip(estimate_tokens(message_token_payload(msg)))}
       </div>
-      <div class="msg-body scrollable">#{render_message_content(msg["content"])}</div>
+      <div class="msg-body scrollable">#{render_message_content(msg["content"], role: role)}</div>
     </div>
   HTML
 end
@@ -863,13 +962,18 @@ def render_shared_history_chip(segment)
     end
 
   expanded = segment["messages"].map do |msg|
+    role = message_role(msg)
+    has_input = role == "user" && user_message_has_input?(msg.is_a?(Hash) ? msg["content"] : msg)
+    msg_class = has_input ? "msg msg-user-input" : "msg"
+    role_label = has_input ? "user · input" : role
+    content = msg.is_a?(Hash) ? msg["content"] : msg
     <<~HTML
-      <div class="msg">
+      <div class="#{msg_class}">
         <div class="msg-role">
-          <span>#{h(message_role(msg))}</span>
+          <span>#{h(role_label)}</span>
           #{token_chip(estimate_tokens(message_token_payload(msg)))}
         </div>
-        <div class="msg-body scrollable">#{render_message_content(msg.is_a?(Hash) ? msg["content"] : msg)}</div>
+        <div class="msg-body scrollable">#{render_message_content(content, role: role)}</div>
       </div>
     HTML
   end.join
@@ -1700,6 +1804,17 @@ PAGE_CSS = <<~CSS
     outline-offset: 2px;
     transition: outline-color 0.2s;
   }
+  .msg-user-input {
+    border-color: rgba(22, 163, 74, 0.45);
+    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.12);
+  }
+  .msg-user-input > .msg-role {
+    background: rgba(22, 163, 74, 0.12);
+    color: #166534;
+  }
+  @media (prefers-color-scheme: dark) {
+    .msg-user-input > .msg-role { color: #86efac; }
+  }
   .msg-role {
     display: flex;
     align-items: center;
@@ -1718,6 +1833,67 @@ PAGE_CSS = <<~CSS
   .scrollable {
     max-height: 28rem;
     overflow: auto;
+  }
+
+  .block-user-input {
+    border-left-color: #16a34a;
+    background: rgba(22, 163, 74, 0.07);
+    border-color: rgba(22, 163, 74, 0.35);
+  }
+  .block-user-input .block-header { background: rgba(22, 163, 74, 0.12); }
+  .block-user-input .block-badge {
+    color: #166534;
+    background: rgba(22, 163, 74, 0.16);
+    border-color: rgba(22, 163, 74, 0.4);
+  }
+  .user-input-text {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif !important;
+    font-size: 0.95rem !important;
+    font-weight: 500;
+    line-height: 1.5;
+    color: #14532d;
+  }
+
+  .block-reminder {
+    border-left-color: rgba(127, 127, 127, 0.4);
+    background: rgba(127, 127, 127, 0.04);
+    opacity: 0.85;
+  }
+  .block-reminder .block-header { background: rgba(127, 127, 127, 0.08); }
+  .block-reminder .block-badge {
+    color: #555;
+    background: rgba(127, 127, 127, 0.14);
+    border-color: rgba(127, 127, 127, 0.3);
+  }
+  .block-reminder > pre.content {
+    max-height: 8rem;
+    overflow: auto;
+    font-size: 0.75rem;
+    color: #666;
+  }
+
+  .block-command {
+    border-left-color: #d97706;
+    background: rgba(217, 119, 6, 0.06);
+  }
+  .block-command .block-header { background: rgba(217, 119, 6, 0.1); }
+  .block-command .block-badge {
+    color: #92400e;
+    background: rgba(217, 119, 6, 0.14);
+    border-color: rgba(217, 119, 6, 0.35);
+  }
+  .block-command > pre.content {
+    max-height: 10rem;
+    overflow: auto;
+    font-size: 0.78rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .block-user-input .block-badge { color: #86efac; }
+    .user-input-text { color: #bbf7d0; }
+    .block-reminder .block-badge { color: #ccc; }
+    .block-reminder > pre.content { color: #aaa; }
+    .block-command .block-badge { color: #fcd34d; }
   }
 
   .token-chip {
