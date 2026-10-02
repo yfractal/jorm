@@ -1018,6 +1018,47 @@ def human_input_chip(inputs)
   end.join
 end
 
+def response_tool_uses(req)
+  body = req["resp_body"]
+  return [] unless body.is_a?(Hash)
+
+  content = body["content"]
+  return [] unless content.is_a?(Array)
+
+  content.filter_map do |block|
+    next unless block.is_a?(Hash) && block["type"].to_s == "tool_use"
+
+    name = block["name"].to_s
+    next if name.empty?
+
+    input = block["input"]
+    input_preview =
+      begin
+        case input
+        when nil, "" then ""
+        when String then truncate(input, 80)
+        else truncate(JSON.generate(input), 80)
+        end
+      rescue StandardError
+        ""
+      end
+
+    {
+      "name" => name,
+      "title" => input_preview.empty? ? name : "#{name} · #{input_preview}"
+    }
+  end
+end
+
+def tool_use_chip(tools)
+  return "" if tools.nil? || tools.empty?
+
+  tools.map do |tool|
+    label = truncate(tool["name"], 20)
+    %(<span class="tool-use-chip mono" title="#{h(tool["title"])}">#{h(label)}</span>)
+  end.join
+end
+
 def render_skill_load_block(raw)
   parsed = parse_skill_load(raw)
   path = parsed["path"]
@@ -1474,7 +1515,7 @@ def render_request_card(req, open_details:)
       </details>
 
       <details class="section-details"#{open_attr}>
-        <summary>Response #{resp_tok}</summary>
+        <summary>Response #{resp_tok}#{tool_use_chip(response_tool_uses(req))}</summary>
         <div class="section-body">#{render_response_body(req)}</div>
       </details>
     </article>
@@ -2167,7 +2208,8 @@ PAGE_CSS = <<~CSS
   .token-chip-est { color: #666; }
   .cache-hit-chip,
   .skill-load-chip,
-  .human-input-chip {
+  .human-input-chip,
+  .tool-use-chip {
     display: inline-flex;
     align-items: center;
     margin-left: 0.35rem;
@@ -2196,6 +2238,11 @@ PAGE_CSS = <<~CSS
     background: rgba(22, 163, 74, 0.14);
     border-color: rgba(22, 163, 74, 0.4);
   }
+  .tool-use-chip {
+    color: #1d4ed8;
+    background: rgba(37, 99, 235, 0.12);
+    border-color: rgba(37, 99, 235, 0.4);
+  }
   .block-header .token-chip,
   .tools-panel-header .token-chip,
   .history-chip-label .token-chip,
@@ -2206,6 +2253,7 @@ PAGE_CSS = <<~CSS
     .cache-hit-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
     .skill-load-chip { color: #fde68a; background: rgba(202, 138, 4, 0.22); }
     .human-input-chip { color: #86efac; background: rgba(22, 163, 74, 0.22); }
+    .tool-use-chip { color: #93c5fd; background: rgba(37, 99, 235, 0.22); }
   }
 
   .history-chip {
