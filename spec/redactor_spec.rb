@@ -27,6 +27,26 @@ RSpec.describe Jorm::Redactor do
       text = '{"key":"sk-abcdefghijk"}'
       expect(described_class.redact_body_text(text)).to eq('{"key":"sk-***redacted***"}')
     end
+
+    it "normalizes BINARY input before redacting" do
+      text = '{"key":"sk-abcdefghijk"}'.b
+      expect(described_class.redact_body_text(text)).to eq('{"key":"sk-***redacted***"}')
+    end
+  end
+
+  describe ".utf8" do
+    it "re-encodes ASCII-8BIT strings as UTF-8" do
+      result = described_class.utf8("café".b)
+      expect(result).to eq("café")
+      expect(result.encoding).to eq(Encoding::UTF_8)
+    end
+
+    it "scrubs invalid UTF-8 byte sequences" do
+      result = described_class.utf8("a\xFFb".b)
+      expect(result.encoding).to eq(Encoding::UTF_8)
+      expect(result).to include("a")
+      expect(result).to include("b")
+    end
   end
 
   describe ".parse_body" do

@@ -106,7 +106,7 @@ module Jorm
         v.is_a?(Array) ? v.join(", ") : v.to_s
       end
       redacted_headers = JSON.generate(Redactor.redact_headers(headers))
-      raw_body = chunks.join.dup.force_encoding("UTF-8").scrub
+      raw_body = Redactor.utf8(chunks.join)
       parsed_body = Redactor.parse_body(raw_body, headers["content-type"])
       body = parsed_body.is_a?(String) ? parsed_body : JSON.generate(parsed_body) unless parsed_body.nil?
 

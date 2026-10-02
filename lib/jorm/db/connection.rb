@@ -22,14 +22,15 @@ module Jorm
     # substituted into the "$1", "$2", ... placeholders before running
     # the query as plain text via #exec.
     #
-    # String params are quoted by doubling embedded single quotes, NOT
-    # via PG::Connection#escape_literal -- GreptimeDB reports
-    # standard_conforming_strings=on (backslashes are literal in a plain
-    # '...' string), but escape_literal still emits Postgres's legacy
-    # E'...' backslash-escaped form for values containing a backslash,
-    # which GreptimeDB then fails to un-escape correctly, corrupting any
-    # JSON value that contains a literal backslash or escaped quote.
+    # String params use dollar-quoting ($tag$value$tag$) so values travel
+    # verbatim without escaping quotes or backslashes. GreptimeDB's
+    # handling of backslash escapes in ordinary '...' strings otherwise
+    # corrupts JSON that contains a literal backslash or escaped quote.
+    # NUL bytes are rewritten to \u0000 (Postgres forbids embedded NULs
+    # in text), and BINARY strings are forced to UTF-8 first.
     class Connection
+      DOLLAR_TAG = "jorm"
+
       def initialize(
         host: Jorm::Config.greptimedb_host,
         port: Jorm::Config.greptimedb_port,
@@ -61,8 +62,22 @@ module Jorm
         when true then "TRUE"
         when false then "FALSE"
         when Integer, Float then value.to_s
-        else "'#{value.to_s.gsub("'", "''")}'"
+        else dollar_quote(utf8(value).gsub("\0", "\\u0000"))
         end
+      end
+
+      # Grow the tag until it doesn't appear in the value, matching
+      # Postgres dollar-quoting rules.
+      def dollar_quote(value)
+        tag = DOLLAR_TAG
+        tag = "#{tag}_r" while value.include?("$#{tag}$")
+        "$#{tag}$#{value}$#{tag}$"
+      end
+
+      def utf8(value)
+        s = value.to_s
+        s = s.dup.force_encoding("UTF-8") if s.encoding == Encoding::ASCII_8BIT
+        s.valid_encoding? ? s : s.scrub
       end
 
       def with_connection

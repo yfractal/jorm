@@ -62,6 +62,12 @@ module Jorm
     def record_request(req, body_buffer, patched)
       return unless @enabled
 
+      request = {
+        "headers" => redact_headers(req.headers),
+        "body" => parse_body(req.body, req.content_type)
+      }
+      request["patchedBody"] = parse_body(body_buffer, req.content_type) if patched
+
       record = {
         "timestamp" => Time.now.utc.iso8601(3),
         "jormRequestId" => req.jorm_request_id,
@@ -69,11 +75,7 @@ module Jorm
         "path_with_query_string" => req.path_with_query_string,
         "upstreamPath" => Jorm::UpstreamClient.upstream_path(req),
         "patched" => patched,
-        "request" => {
-          "headers" => req.headers,
-          "body" => body_buffer,
-          "patchedBody" => patched
-        }
+        "request" => request
       }
 
       write("req", record)
@@ -97,7 +99,7 @@ module Jorm
         headers = upstream_result.headers.transform_keys(&:to_s).transform_values do |v|
           v.is_a?(Array) ? v.join(", ") : v.to_s
         end
-        resp_buf = chunks.join
+        resp_buf = Redactor.utf8(chunks.join)
 
         response = {
           "status" => upstream_result.status,

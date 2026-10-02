@@ -103,18 +103,67 @@ RSpec.describe Jorm::Recorder do
 
   describe "#record_request" do
     it "builds and writes a request record tagged with the request's jorm_request_id" do
-      req = build_req
+      req = build_req("rack.input" => StringIO.new('{"model":"x"}'))
 
-      recorder.record_request(req, '{"patched":true}', true)
+      recorder.record_request(req, '{"model":"x","patched":true}', true)
 
       record = written_records("req").first
       expect(record["jormRequestId"]).to eq(req.jorm_request_id)
       expect(record["method"]).to eq("POST")
       expect(record["path_with_query_string"]).to eq("/v1/messages")
       expect(record["patched"]).to eq(true)
-      expect(record["request"]["headers"]).to eq(req.headers)
-      expect(record["request"]["body"]).to eq('{"patched":true}')
-      expect(record["request"]["patchedBody"]).to eq(true)
+      expect(record["request"]["body"]).to eq("model" => "x")
+      expect(record["request"]["patchedBody"]).to eq("model" => "x", "patched" => true)
+    end
+
+    it "redacts sensitive request headers before writing" do
+      req = build_req(
+        "HTTP_AUTHORIZATION" => "Bearer sk-secret",
+        "HTTP_X_API_KEY" => "sk-abc"
+      )
+
+      recorder.record_request(req, '{"patched":true}', true)
+
+      headers = written_records("req").first["request"]["headers"]
+      expect(headers["authorization"]).to eq("***redacted***")
+      expect(headers["x-api-key"]).to eq("***redacted***")
+    end
+
+    it "records the original request body parsed and redacted" do
+      req = build_req("rack.input" => StringIO.new('{"token":"sk-abcdefghijk"}'))
+
+      recorder.record_request(req, '{"token":"sk-***redacted***","patched":true}', true)
+
+      record = written_records("req").first
+      expect(record["request"]["body"]).to eq("token" => "sk-***redacted***")
+    end
+
+    it "records the patched body separately when the request was patched" do
+      req = build_req("rack.input" => StringIO.new('{"model":"x"}'))
+
+      recorder.record_request(req, '{"model":"x","patched":true}', true)
+
+      record = written_records("req").first
+      expect(record["request"]["patchedBody"]).to eq("model" => "x", "patched" => true)
+    end
+
+    it "omits patchedBody when the request was not patched" do
+      req = build_req("rack.input" => StringIO.new('{"model":"x"}'))
+
+      recorder.record_request(req, '{"model":"x"}', false)
+
+      record = written_records("req").first
+      expect(record["request"]).not_to have_key("patchedBody")
+    end
+
+    it "does not emit BINARY strings, which JSON.generate warns on" do
+      req = build_req("rack.input" => StringIO.new('{"text":"café"}'.b))
+
+      recorder.record_request(req, '{"text":"café","patched":true}'.b, true)
+
+      record = written_records("req").first
+      expect(record["request"]["body"]).to eq("text" => "café")
+      expect(record["request"]["body"]["text"].encoding).to eq(Encoding::UTF_8)
     end
   end
 
@@ -145,6 +194,21 @@ RSpec.describe Jorm::Recorder do
         "chunkTimes" => [1.05],
         "finishedAt" => 1.2
       )
+    end
+
+    it "re-encodes a BINARY response buffer as UTF-8 so JSON.generate doesn't warn" do
+      req = build_req
+      upstream_result = Jorm::UpstreamClient::Result.new(
+        status: 200,
+        headers: { "content-type" => "text/plain" },
+        retries: 0
+      )
+
+      recorder.maybe_record_response(req, ['{"text":"café"}'.b], upstream_result, timing)
+
+      record = written_records("res").first
+      expect(record["response"]["body"]).to eq('{"text":"café"}')
+      expect(record["response"]["body"].encoding).to eq(Encoding::UTF_8)
     end
 
     it "persists timing, retries and error when provided" do

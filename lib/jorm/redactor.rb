@@ -25,13 +25,26 @@ module Jorm
     end
 
     def redact_body_text(text)
+      # Bodies arrive as BINARY (rack.input) and may contain invalid UTF-8
+      # byte sequences; gsub on such a string raises ArgumentError, so
+      # normalize first.
+      redact_utf8(utf8(text))
+    end
+
+    def utf8(text)
+      s = text.to_s
+      s = s.dup.force_encoding("UTF-8") if s.encoding == Encoding::ASCII_8BIT
+      s.valid_encoding? ? s : s.scrub
+    end
+
+    def redact_utf8(text)
       text.gsub(/sk-[A-Za-z0-9_-]{6,}/, "sk-***redacted***")
     end
 
     def parse_body(raw_bytes, content_type)
       return nil if raw_bytes.nil? || raw_bytes.empty?
 
-      raw = redact_body_text(raw_bytes.dup.force_encoding("UTF-8"))
+      raw = redact_body_text(raw_bytes)
       ct = content_type.to_s
       if ct.include?("application/json")
         JSON.parse(raw)
