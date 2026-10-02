@@ -13,8 +13,8 @@
 # not a Gemfile dependency; no `bundle install` required).
 #
 # Usage:
-#   bin/session_costs
-#   JO_REPORT_PORT=5000 bin/session_costs
+#   bin/sessions
+#   JO_REPORT_PORT=5000 bin/sessions
 # Then open http://127.0.0.1:4890/
 
 require "cgi"
@@ -1551,12 +1551,12 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Session costs — jorm</title>
+      <title>Sessions — jorm</title>
       <style>#{PAGE_CSS}</style>
     </head>
     <body>
       <header class="page-header">
-        <h1>Claude Code session costs</h1>
+        <h1>Claude Code sessions</h1>
         <p class="subtitle">
           Cost is read from OpenRouter's <code>usage.cost</code> field, grouped by Claude Code session.
           Only meaningful when the upstream is OpenRouter. Click a session to see request and response detail.
@@ -2563,6 +2563,6 @@ end
 trap("INT") { server.shutdown }
 trap("TERM") { server.shutdown }
 
-puts "jorm session costs → http://#{REPORT_HOST}:#{REPORT_PORT}/"
+puts "jorm sessions → http://#{REPORT_HOST}:#{REPORT_PORT}/"
 puts "  GreptimeDB HTTP: http://#{GREPTIME_HOST}:#{GREPTIME_PORT}/v1/sql?db=#{GREPTIME_DB}"
 server.start

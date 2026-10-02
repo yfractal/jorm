@@ -137,10 +137,10 @@ Loads synthetic rows from
 ruby spec/fixtures/generate_llm_performance_demo.rb
 ```
 
-### Session costs
+### Sessions
 
 ```bash
-bin/session_costs
+bin/sessions
 # → http://127.0.0.1:4890/
 ```
 
@@ -152,7 +152,7 @@ Report env vars (shared):
 | Variable | Default | Description |
 |---|---|---|
 | `JO_REPORT_HOST` | `127.0.0.1` | Bind host for report servers |
-| `JO_REPORT_PORT` | `4891` / `4890` | Bind port (`llm_performance` / `session_costs`) |
+| `JO_REPORT_PORT` | `4891` / `4890` | Bind port (`llm_performance` / `sessions`) |
 | `JO_DEMO` | off | Set to `1` to serve `llm_performance` from the demo fixture |
 | `JO_DEMO_FIXTURE` | `spec/fixtures/llm_performance_demo.json` | Override demo fixture path |
 | `GREPTIMEDB_HTTP_HOST` | `127.0.0.1` | GreptimeDB HTTP API host |
