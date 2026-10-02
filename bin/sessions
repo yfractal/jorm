@@ -393,7 +393,74 @@ def group_sessions(rows)
     session["total_cost"] += cost if cost
   end
 
-  sessions.values.sort_by { |s| -(s["last_message_at"] || 0) }
+  sessions.values
+end
+
+def sort_key_time(value)
+  case value
+  when nil then 0
+  when Integer then value
+  when Float then value
+  when Time then (value.to_f * 1000).round
+  else
+    begin
+      (Time.parse(value.to_s).to_f * 1000).round
+    rescue ArgumentError, TypeError
+      0
+    end
+  end
+end
+
+SORT_COLUMNS = {
+  "session" => ->(s) { s["session_id"].to_s.downcase },
+  "created" => ->(s) { sort_key_time(s["created_at"]) },
+  "last_message" => ->(s) { sort_key_time(s["last_message_at"]) },
+  "requests" => ->(s) { s["requests"].size },
+  "cost" => ->(s) { s["total_cost"].to_f }
+}.freeze
+
+DEFAULT_SORT = "created"
+DEFAULT_DIR = "desc"
+
+def normalize_sort(sort)
+  SORT_COLUMNS.key?(sort.to_s) ? sort.to_s : DEFAULT_SORT
+end
+
+def normalize_dir(dir)
+  dir.to_s == "asc" ? "asc" : "desc"
+end
+
+def sort_sessions(sessions, sort:, dir:)
+  sort = normalize_sort(sort)
+  dir = normalize_dir(dir)
+  key = SORT_COLUMNS[sort]
+  sorted = sessions.sort_by { |s| key.call(s) }
+  dir == "asc" ? sorted : sorted.reverse
+end
+
+def next_sort_dir(column, current_sort, current_dir)
+  if column == current_sort
+    current_dir == "asc" ? "desc" : "asc"
+  else
+    column == "session" ? "asc" : "desc"
+  end
+end
+
+def sort_header(label, column, base_params:, sort:, dir:, css: nil)
+  sort = normalize_sort(sort)
+  dir = normalize_dir(dir)
+  active = column == sort
+  next_dir = next_sort_dir(column, sort, dir)
+  href = query_string(base_params.merge(sort: column, dir: next_dir, page: nil))
+  indicator =
+    if active
+      dir == "asc" ? " ↑" : " ↓"
+    else
+      ""
+    end
+  aria = active ? %( aria-sort="#{dir == "asc" ? "ascending" : "descending"}") : ""
+  cls = ["sort-th", css, (active ? "sort-active" : nil)].compact.join(" ")
+  %(<th class="#{cls}"#{aria}><a class="sort-link" href="/#{h(href)}" title="Sort by #{h(label)}">#{h(label)}#{indicator}</a></th>)
 end
 
 def build_session_detail(session_id, rows)
@@ -654,13 +721,15 @@ def short_session_id(session_id)
   "#{session_id[0, 8]}…"
 end
 
-def list_params(range_preset:, from_raw:, to_raw:, per_page:, page: nil)
+def list_params(range_preset:, from_raw:, to_raw:, per_page:, page: nil, sort: DEFAULT_SORT, dir: DEFAULT_DIR)
   {
     range: range_preset,
     from: from_raw,
     to: to_raw,
     per_page: per_page.to_s,
-    page: page&.to_s
+    page: page&.to_s,
+    sort: normalize_sort(sort),
+    dir: normalize_dir(dir)
   }
 end
 
@@ -681,6 +750,8 @@ def parse_list_query(req)
   page = 1 if page < 1
   per_page = DEFAULT_PER_PAGE if per_page < 1
   per_page = 100 if per_page > 100
+  sort = normalize_sort(req.query["sort"])
+  dir = normalize_dir(req.query["dir"].to_s.empty? ? DEFAULT_DIR : req.query["dir"])
 
   {
     range_preset: range_preset,
@@ -689,7 +760,9 @@ def parse_list_query(req)
     from_time: from_time,
     to_time: to_time,
     page: page,
-    per_page: per_page
+    per_page: per_page,
+    sort: sort,
+    dir: dir
   }
 end
 
@@ -1482,23 +1555,6 @@ def status_pill(req)
   end
 end
 
-def section_copy_button(value)
-  text =
-    if value.is_a?(Hash) || value.is_a?(Array)
-      pretty_json(value)
-    elsif value.nil? || value.to_s.empty?
-      ""
-    else
-      value.to_s
-    end
-
-  disabled = text.empty? ? " disabled" : ""
-  <<~HTML
-    <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{disabled}>Copy</button>
-    <textarea class="copy-payload" hidden readonly>#{h(text)}</textarea>
-  HTML
-end
-
 def render_request_card(req, open_details:)
   open_attr = open_details ? " open" : ""
   model = req["model"].to_s.empty? ? "—" : req["model"]
@@ -1562,14 +1618,18 @@ end
 # Pages
 # ---------------------------------------------------------------------------
 
-def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, from_time:, to_time:, error: nil)
+def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, from_time:, to_time:, sort: DEFAULT_SORT, dir: DEFAULT_DIR, error: nil)
+  sort = normalize_sort(sort)
+  dir = normalize_dir(dir)
+  sessions = sort_sessions(sessions, sort: sort, dir: dir)
   total = sessions.size
   total_pages = [((total + per_page - 1) / per_page), 1].max
   page = page.clamp(1, total_pages)
   slice = sessions[((page - 1) * per_page), per_page] || []
   filters_active = !from_raw.to_s.empty? || !to_raw.to_s.empty? ||
                    (range_preset && range_preset != DEFAULT_RANGE) ||
-                   per_page != DEFAULT_PER_PAGE
+                   per_page != DEFAULT_PER_PAGE ||
+                   sort != DEFAULT_SORT || dir != DEFAULT_DIR
 
   grand_total_cost = sessions.sum { |s| s["total_cost"] }
   grand_total_requests = sessions.sum { |s| s["requests"].size }
@@ -1578,7 +1638,9 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
     range_preset: range_preset,
     from_raw: from_raw,
     to_raw: to_raw,
-    per_page: per_page
+    per_page: per_page,
+    sort: sort,
+    dir: dir
   )
 
   prev_link = pager_link(base_params, page - 1, "← Prev", enabled: page > 1)
@@ -1602,11 +1664,11 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
         <table>
           <thead>
             <tr>
-              <th>Session</th>
-              <th>Created</th>
-              <th>Last message</th>
-              <th class="num">Requests</th>
-              <th class="num">Total cost</th>
+              #{sort_header("Session", "session", base_params: base_params, sort: sort, dir: dir)}
+              #{sort_header("Created", "created", base_params: base_params, sort: sort, dir: dir)}
+              #{sort_header("Last message", "last_message", base_params: base_params, sort: sort, dir: dir)}
+              #{sort_header("Requests", "requests", base_params: base_params, sort: sort, dir: dir, css: "num")}
+              #{sort_header("Total cost", "cost", base_params: base_params, sort: sort, dir: dir, css: "num")}
               <th class="chevron-col" aria-hidden="true"></th>
             </tr>
           </thead>
@@ -1673,6 +1735,8 @@ def render_page(sessions:, page:, per_page:, range_preset:, from_raw:, to_raw:, 
           <input id="per_page" type="number" name="per_page" min="1" max="100" value="#{per_page}">
         </div>
         <input type="hidden" name="range" value="#{h(range_preset || DEFAULT_RANGE)}">
+        <input type="hidden" name="sort" value="#{h(sort)}">
+        <input type="hidden" name="dir" value="#{h(dir)}">
         <div class="field field-actions">
           <button type="submit" class="btn btn-primary">Apply</button>
           #{%(<a href="/" class="btn btn-ghost">Reset</a>) if filters_active}
@@ -1713,13 +1777,15 @@ def render_session_row(s, list_params)
   HTML
 end
 
-def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, page:, error: nil)
+def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, page:, sort: DEFAULT_SORT, dir: DEFAULT_DIR, error: nil)
   back_href = "/#{query_string(list_params(
     range_preset: range_preset,
     from_raw: from_raw,
     to_raw: to_raw,
     per_page: per_page,
-    page: page
+    page: page,
+    sort: sort,
+    dir: dir
   ))}"
 
   session_id = detail&.dig("session_id").to_s
@@ -2018,6 +2084,20 @@ PAGE_CSS = <<~CSS
     letter-spacing: 0.03em;
     color: #666;
     border-bottom: 2px solid rgba(127, 127, 127, 0.3);
+  }
+  th.num .sort-link { justify-content: flex-end; }
+  a.sort-link {
+    color: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    white-space: nowrap;
+  }
+  a.sort-link:hover { color: #2563eb; text-decoration: underline; }
+  th.sort-active a.sort-link { color: #111; }
+  @media (prefers-color-scheme: dark) {
+    th.sort-active a.sort-link { color: #eee; }
   }
   .session-row td { border-bottom: 1px solid rgba(127, 127, 127, 0.18); font-weight: 500; }
   .session-row:hover td { background: rgba(127, 127, 127, 0.06); }
@@ -2676,6 +2756,8 @@ server.mount_proc "/" do |req, res|
     to_raw: q[:to_raw],
     from_time: q[:from_time],
     to_time: q[:to_time],
+    sort: q[:sort],
+    dir: q[:dir],
     error: error
   )
 end
@@ -2710,6 +2792,8 @@ server.mount_proc "/session" do |req, res|
     to_raw: q[:to_raw],
     per_page: q[:per_page],
     page: q[:page],
+    sort: q[:sort],
+    dir: q[:dir],
     error: error
   )
 end
