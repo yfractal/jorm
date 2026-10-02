@@ -1031,31 +1031,35 @@ def response_tool_uses(req)
     name = block["name"].to_s
     next if name.empty?
 
-    input = block["input"]
-    input_preview =
-      begin
-        case input
-        when nil, "" then ""
-        when String then truncate(input, 80)
-        else truncate(JSON.generate(input), 80)
-        end
-      rescue StandardError
-        ""
-      end
-
-    {
-      "name" => name,
-      "title" => input_preview.empty? ? name : "#{name} · #{input_preview}"
-    }
+    name
   end
 end
 
-def tool_use_chip(tools)
-  return "" if tools.nil? || tools.empty?
+# One chip per distinct tool name, e.g. "tool usage: read" / "tool usage: read x 3".
+def tool_use_chip(tool_names)
+  return "" if tool_names.nil? || tool_names.empty?
 
-  tools.map do |tool|
-    label = truncate(tool["name"], 20)
-    %(<span class="tool-use-chip mono" title="#{h(tool["title"])}">#{h(label)}</span>)
+  counts = {}
+  order = []
+  tool_names.each do |name|
+    key = name.to_s.downcase
+    unless counts.key?(key)
+      counts[key] = { "name" => name.to_s, "count" => 0 }
+      order << key
+    end
+    counts[key]["count"] += 1
+  end
+
+  order.map do |key|
+    entry = counts[key]
+    display = entry["name"].downcase
+    label =
+      if entry["count"] == 1
+        "tool usage: #{display}"
+      else
+        "tool usage: #{display} x #{entry["count"]}"
+      end
+    %(<span class="tool-use-chip mono" title="#{h(label)}">#{h(label)}</span>)
   end.join
 end
 
