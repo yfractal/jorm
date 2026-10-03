@@ -1051,6 +1051,8 @@ def available_skills_catalog_only?(text)
 end
 
 def render_meta_text_block(text, kind:)
+  return "" if available_skills_catalog_only?(text)
+
   case kind
   when :system_reminder
     badge = "System reminder"
@@ -1074,7 +1076,10 @@ def render_meta_text_block(text, kind:)
 
   body =
     if text.to_s.match?(available_skills_catalog_pattern) || text.to_s.match?(skill_load_pattern)
-      %(<div class="block-body">#{render_text_content(text)}</div>)
+      inner = render_text_content(text)
+      return "" if inner.strip.empty? || inner == %(<pre class="content"></pre>)
+
+      %(<div class="block-body">#{inner}</div>)
     else
       %(<pre class="content">#{h(text)}</pre>)
     end
@@ -1448,6 +1453,8 @@ end
 def render_message_content(content, role: nil)
   case content
   when String
+    return "" if available_skills_catalog_only?(content)
+
     if role.to_s == "user"
       kind = classify_user_text(content)
       case kind
