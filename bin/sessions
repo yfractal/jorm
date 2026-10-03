@@ -116,6 +116,27 @@ def format_ms(ms)
   format("%.2f s", ms / 1000.0)
 end
 
+def format_tps(tps)
+  return "—" if tps.nil?
+
+  format("%.1f", tps)
+end
+
+# output_tokens / generation time (duration − TTFT). Matches llm_performance.
+def compute_tokens_per_sec(output_tokens, duration_ms, ttft_ms)
+  output = output_tokens.to_i
+  return nil if output <= 0 || duration_ms.nil? || duration_ms <= 0
+
+  gen_ms = if ttft_ms && ttft_ms > 0 && duration_ms > ttft_ms
+             duration_ms - ttft_ms
+           else
+             duration_ms
+           end
+  return nil if gen_ms <= 0
+
+  (output / (gen_ms / 1000.0)).round(2)
+end
+
 def format_tokens(count)
   return "—" if count.nil?
 
@@ -485,6 +506,9 @@ def build_session_detail(session_id, rows)
       cache_read_tokens: tokens["cache_read_tokens"],
       cache_creation_tokens: tokens["cache_creation_tokens"]
     )
+    ttft_ms = to_f_or_nil(row["ttft_ms"])
+    duration_ms = to_f_or_nil(row["duration_ms"])
+    tokens_per_sec = compute_tokens_per_sec(tokens["output_tokens"], duration_ms, ttft_ms)
 
     {
       "index" => index,
@@ -505,8 +529,9 @@ def build_session_detail(session_id, rows)
       "cache_creation_tokens" => tokens["cache_creation_tokens"],
       "prompt_tokens" => prompt_tokens,
       "cache_hit_rate" => hit_rate,
-      "ttft_ms" => to_f_or_nil(row["ttft_ms"]),
-      "duration_ms" => to_f_or_nil(row["duration_ms"]),
+      "ttft_ms" => ttft_ms,
+      "duration_ms" => duration_ms,
+      "tokens_per_sec" => tokens_per_sec,
       "has_response" => !(row["resp_body"].nil? || row["resp_body"].to_s.empty?) || !status.nil?
     }
   end
@@ -516,6 +541,7 @@ def build_session_detail(session_id, rows)
   costs = requests.filter_map { |r| r["cost"] }
   input_tokens = requests.filter_map { |r| r["input_tokens"] }
   output_tokens = requests.filter_map { |r| r["output_tokens"] }
+  tokens_per_sec = requests.filter_map { |r| r["tokens_per_sec"] }
 
   {
     "session_id" => session_id,
@@ -526,7 +552,8 @@ def build_session_detail(session_id, rows)
     "total_output_tokens" => output_tokens.empty? ? nil : output_tokens.sum,
     "avg_duration_ms" => mean(durations),
     "max_duration_ms" => durations.max,
-    "avg_ttft_ms" => mean(ttfts)
+    "avg_ttft_ms" => mean(ttfts),
+    "avg_tokens_per_sec" => mean(tokens_per_sec)
   }
 end
 
@@ -1555,6 +1582,27 @@ def status_pill(req)
   end
 end
 
+def request_brief_metrics(req)
+  items = [
+    ["TTFT", format_ms(req["ttft_ms"]), req["ttft_ms"].nil?],
+    ["Tok/s", format_tps(req["tokens_per_sec"]), req["tokens_per_sec"].nil?],
+    ["Latency", format_ms(req["duration_ms"]), req["duration_ms"].nil?],
+    ["Cost", format_cost(req["cost"]), req["cost"].nil?]
+  ]
+
+  cells = items.map do |label, value, missing|
+    cls = missing ? " req-brief-metric-missing" : ""
+    <<~HTML
+      <span class="req-brief-metric#{cls}">
+        <span class="req-brief-metric-label">#{h(label)}</span>
+        <span class="req-brief-metric-value mono">#{h(value)}</span>
+      </span>
+    HTML
+  end.join
+
+  %(<span class="req-brief-metrics" aria-label="Request metrics">#{cells}</span>)
+end
+
 def render_request_card(req, open_details:)
   open_attr = open_details ? " open" : ""
   model = req["model"].to_s.empty? ? "—" : req["model"]
@@ -1590,7 +1638,10 @@ def render_request_card(req, open_details:)
       <details class="section-details request-section"#{open_attr}>
         <summary>
           <span class="section-summary-main">Request #{req_tok}#{human_input_chip(request_human_inputs(req))}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</span>
-          <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{body.nil? ? " disabled" : ""}>Copy</button>
+          <span class="section-summary-right">
+            #{request_brief_metrics(req)}
+            <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{body.nil? ? " disabled" : ""}>Copy</button>
+          </span>
         </summary>
         <textarea class="copy-payload" hidden readonly>#{h(body.nil? ? "" : pretty_json(body))}</textarea>
         <div class="section-body">#{render_request_body(req)}</div>
@@ -1599,7 +1650,9 @@ def render_request_card(req, open_details:)
       <details class="section-details"#{open_attr}>
         <summary>
           <span class="section-summary-main">Response #{resp_tok}#{tool_use_chip(response_tool_uses(req))}</span>
-          <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{resp_copy_source.nil? || resp_copy_source.to_s.empty? ? " disabled" : ""}>Copy</button>
+          <span class="section-summary-right">
+            <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{resp_copy_source.nil? || resp_copy_source.to_s.empty? ? " disabled" : ""}>Copy</button>
+          </span>
         </summary>
         <textarea class="copy-payload" hidden readonly>#{
           if resp_copy_source.is_a?(Hash) || resp_copy_source.is_a?(Array)
@@ -1830,6 +1883,10 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
           <div class="stat">
             <span class="stat-value #{ms_class(detail["avg_ttft_ms"])}">#{h(format_ms(detail["avg_ttft_ms"]))}</span>
             <span class="stat-label">Avg TTFT</span>
+          </div>
+          <div class="stat">
+            <span class="stat-value #{tokens_class(detail["avg_tokens_per_sec"])}">#{h(format_tps(detail["avg_tokens_per_sec"]))}</span>
+            <span class="stat-label">Avg tok/s</span>
           </div>
         </section>
 
@@ -2236,9 +2293,47 @@ PAGE_CSS = <<~CSS
     min-width: 0;
     flex: 1;
   }
+  .section-summary-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .req-brief-metrics {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.55rem 0.85rem;
+    font-weight: 500;
+  }
+  .req-brief-metric {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    white-space: nowrap;
+  }
+  .req-brief-metric-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #888;
+  }
+  .req-brief-metric-value {
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: #333;
+  }
+  .req-brief-metric-missing .req-brief-metric-value { color: #999; }
+  @media (prefers-color-scheme: dark) {
+    .req-brief-metric-label { color: #888; }
+    .req-brief-metric-value { color: #ddd; }
+    .req-brief-metric-missing .req-brief-metric-value { color: #777; }
+  }
   .copy-btn {
     flex-shrink: 0;
-    margin-left: auto;
     appearance: none;
     border: 1px solid rgba(127, 127, 127, 0.35);
     background: rgba(127, 127, 127, 0.08);
@@ -2718,6 +2813,8 @@ PAGE_CSS = <<~CSS
     .pager { flex-direction: column; gap: 0.75rem; align-items: stretch; text-align: center; }
     .metrics { grid-template-columns: 1fr; }
     .req-card-header { flex-direction: column; align-items: stretch; }
+    .section-details > summary { flex-wrap: wrap; }
+    .section-summary-right { margin-left: 0; width: 100%; justify-content: space-between; }
   }
 CSS
 
