@@ -1,5 +1,7 @@
 # jorm
 
+Jörmungandr—the World Serpent, its head clasped to its tail, encircling the world, awaiting Ragnarök.
+
 Reverse proxy (Ruby / Falcon / Async) that forwards Anthropic-compatible
 requests to any configured upstream, with optional patching of Cursor
 security-classifier payloads and request/response recording to
