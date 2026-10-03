@@ -18,20 +18,20 @@ RSpec.describe Jorm::Db::Connection do
       connection.send(:literal, value)
     end
 
-    it "dollar-quotes string values" do
-      expect(literal('{"a":1}')).to eq(%($jorm${"a":1}$jorm$))
+    it "single-quotes string values and doubles embedded quotes" do
+      expect(literal(%(it's fine))).to eq(%('it''s fine'))
     end
 
-    it "grows the tag when the value already contains $jorm$" do
-      expect(literal("x$jorm$y")).to eq("$jorm_r$x$jorm$y$jorm_r$")
+    it "leaves backslashes literal (no E'...' form)" do
+      expect(literal('{"a":"b\\"c"}')).to eq(%('{"a":"b\\"c"}'))
     end
 
     it "rewrites embedded NUL bytes" do
-      expect(literal("a\0b")).to eq("$jorm$a\\u0000b$jorm$")
+      expect(literal("a\0b")).to eq(%('a\\u0000b'))
     end
 
     it "re-encodes BINARY strings as UTF-8 before quoting" do
-      expect(literal("café".b)).to eq("$jorm$café$jorm$")
+      expect(literal("café".b)).to eq(%('café'))
     end
 
     it "passes through nil / bool / numbers" do
