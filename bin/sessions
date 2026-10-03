@@ -44,6 +44,13 @@ RANGE_PRESETS = {
 
 DEFAULT_RANGE = "24h"
 
+# Distinct model colors, assigned in first-seen order (wraps after 10).
+# Same palette as bin/llm_performance chart series.
+MODEL_COLORS = [
+  "#2563eb", "#ca8a04", "#16a34a", "#dc2626", "#9333ea",
+  "#0891b2", "#ea580c", "#4f46e5", "#be185d", "#0f766e"
+].freeze
+
 # ---------------------------------------------------------------------------
 # GreptimeDB HTTP SQL client
 # ---------------------------------------------------------------------------
@@ -1582,6 +1589,25 @@ def status_pill(req)
   end
 end
 
+# First-seen model name → palette index (0..MODEL_COLORS.size-1).
+def assign_model_colors(requests)
+  map = {}
+  Array(requests).each do |req|
+    model = req.is_a?(Hash) ? req["model"].to_s : ""
+    next if model.empty? || map.key?(model)
+
+    map[model] = map.size % MODEL_COLORS.size
+  end
+  map
+end
+
+def model_color_class(model, model_colors)
+  idx = model_colors[model.to_s]
+  return "" if idx.nil?
+
+  " model-color-#{idx}"
+end
+
 def request_brief_metrics(req)
   items = [
     ["TTFT", format_ms(req["ttft_ms"]), req["ttft_ms"].nil?],
@@ -1603,9 +1629,10 @@ def request_brief_metrics(req)
   %(<span class="req-brief-metrics" aria-label="Request metrics">#{cells}</span>)
 end
 
-def render_request_card(req, open_details:)
+def render_request_card(req, open_details:, model_colors: {})
   open_attr = open_details ? " open" : ""
   model = req["model"].to_s.empty? ? "—" : req["model"]
+  model_cls = model_color_class(req["model"], model_colors)
   req_index = req["index"]
   body = req["req_body"]
   # Prefer total prompt tokens (uncached + cache write + cache read).
@@ -1630,7 +1657,7 @@ def render_request_card(req, open_details:)
         <div class="req-card-title">
           <span class="req-index">##{req_index}</span>
           <span class="mono time-cell">#{h(format_ts(req["time"]))}</span>
-          <span class="mono model-cell" title="#{h(model)}">#{h(model)}</span>
+          <span class="mono model-cell#{model_cls}" title="#{h(model)}">#{h(model)}</span>
         </div>
         #{status_pill(req)}
       </header>
@@ -1857,9 +1884,12 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
         </div>
       HTML
     else
-      cards = detail["requests"].map { |req| render_request_card(req, open_details: open_details) }.join
+      model_colors = assign_model_colors(detail["requests"])
+      cards = detail["requests"].map do |req|
+        render_request_card(req, open_details: open_details, model_colors: model_colors)
+      end.join
       <<~HTML
-        <section class="stats" aria-label="Session summary">
+        <section class="stats stats-row" aria-label="Session summary">
           <div class="stat">
             <span class="stat-value">#{detail["request_count"]}</span>
             <span class="stat-label">Request#{"s" unless detail["request_count"] == 1}</span>
@@ -2060,6 +2090,10 @@ PAGE_CSS = <<~CSS
   @media (prefers-color-scheme: dark) { .session-id-full { color: #bbb; } }
 
   .stats { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .stats.stats-row {
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
   .stat {
     flex: 1 1 140px;
     border: 1px solid rgba(127, 127, 127, 0.3);
@@ -2069,9 +2103,21 @@ PAGE_CSS = <<~CSS
     flex-direction: column;
     gap: 0.15rem;
   }
+  .stats.stats-row .stat {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0.65rem 0.7rem;
+  }
   .stat-primary { border-color: #2563eb; background: rgba(37, 99, 235, 0.06); }
   .stat-value { font-size: 1.4rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stats.stats-row .stat-value {
+    font-size: 1.15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .stat-label { font-size: 0.78rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+  .stats.stats-row .stat-label { font-size: 0.7rem; }
 
   form.filter {
     display: flex;
@@ -2214,8 +2260,31 @@ PAGE_CSS = <<~CSS
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #555;
+    font-weight: 600;
   }
   @media (prefers-color-scheme: dark) { .model-cell { color: #bbb; } }
+  .model-cell.model-color-0 { color: #2563eb; }
+  .model-cell.model-color-1 { color: #ca8a04; }
+  .model-cell.model-color-2 { color: #16a34a; }
+  .model-cell.model-color-3 { color: #dc2626; }
+  .model-cell.model-color-4 { color: #9333ea; }
+  .model-cell.model-color-5 { color: #0891b2; }
+  .model-cell.model-color-6 { color: #ea580c; }
+  .model-cell.model-color-7 { color: #4f46e5; }
+  .model-cell.model-color-8 { color: #be185d; }
+  .model-cell.model-color-9 { color: #0f766e; }
+  @media (prefers-color-scheme: dark) {
+    .model-cell.model-color-0 { color: #60a5fa; }
+    .model-cell.model-color-1 { color: #fbbf24; }
+    .model-cell.model-color-2 { color: #4ade80; }
+    .model-cell.model-color-3 { color: #f87171; }
+    .model-cell.model-color-4 { color: #c084fc; }
+    .model-cell.model-color-5 { color: #22d3ee; }
+    .model-cell.model-color-6 { color: #fb923c; }
+    .model-cell.model-color-7 { color: #818cf8; }
+    .model-cell.model-color-8 { color: #f472b6; }
+    .model-cell.model-color-9 { color: #2dd4bf; }
+  }
 
   .metrics {
     display: grid;
@@ -2806,7 +2875,8 @@ PAGE_CSS = <<~CSS
   .pager-status { color: #666; }
 
   @media (max-width: 640px) {
-    .stats { flex-direction: column; }
+    .stats,
+    .stats.stats-row { flex-direction: column; flex-wrap: wrap; }
     form.filter { flex-direction: column; align-items: stretch; }
     .field-narrow input { width: 100%; }
     .field-actions { flex-direction: column; }
