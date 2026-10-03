@@ -1895,7 +1895,7 @@ def render_request_card(req, open_details:, model_colors: {})
         <div class="section-body">#{render_request_body(req)}</div>
       </details>
 
-      <details class="section-details"#{open_attr}>
+      <details class="section-details response-section"#{open_attr}>
         <summary>
           <span class="section-summary-main">Response #{resp_tok}#{tool_use_chip(response_tool_uses(req))}</span>
           <span class="section-summary-right">
@@ -2579,6 +2579,37 @@ PAGE_CSS = <<~CSS
   }
 
   .section-details { margin-top: 0.55rem; }
+  .section-details.request-section,
+  .section-details.response-section {
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    border-left-width: 3px;
+    border-radius: 6px;
+    padding: 0.35rem 0.65rem 0.45rem;
+  }
+  .section-details.request-section {
+    border-left-color: #2563eb;
+    background: rgba(37, 99, 235, 0.04);
+  }
+  .section-details.response-section {
+    border-left-color: #0d9488;
+    background: rgba(13, 148, 136, 0.04);
+  }
+  .section-details.request-section > summary { color: #1e40af; }
+  .section-details.response-section > summary { color: #0f766e; }
+  @media (prefers-color-scheme: dark) {
+    .section-details.request-section {
+      border-color: rgba(37, 99, 235, 0.35);
+      border-left-color: #3b82f6;
+      background: rgba(37, 99, 235, 0.07);
+    }
+    .section-details.response-section {
+      border-color: rgba(13, 148, 136, 0.35);
+      border-left-color: #2dd4bf;
+      background: rgba(13, 148, 136, 0.07);
+    }
+    .section-details.request-section > summary { color: #93c5fd; }
+    .section-details.response-section > summary { color: #5eead4; }
+  }
   .section-details > summary {
     display: flex;
     align-items: center;
