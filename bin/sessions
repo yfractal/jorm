@@ -211,6 +211,21 @@ def token_chip(count, estimated: true)
   %(<span class="token-chip#{' token-chip-est' if estimated}" title="#{h(title)}">#{h(label)}</span>)
 end
 
+# Hidden payload + Copy button for a block/section. Parent should be
+# .copy-root (or details) so the click handler can find .copy-payload.
+def copy_controls(payload, title: "Copy")
+  text =
+    case payload
+    when Hash, Array then pretty_json(payload)
+    else payload.to_s
+    end
+  disabled = text.empty? ? " disabled" : ""
+  <<~HTML.strip
+    <button type="button" class="copy-btn" data-action="copy-section" title="#{h(title)}"#{disabled}>Copy</button>
+    <textarea class="copy-payload" hidden readonly>#{h(text)}</textarea>
+  HTML
+end
+
 def message_token_payload(msg)
   return msg unless msg.is_a?(Hash)
 
@@ -1069,10 +1084,11 @@ def render_meta_text_block(text, kind:)
     end
 
   <<~HTML
-    <div class="block #{css}">
+    <div class="block #{css} copy-root">
       <div class="block-header">
         <span class="block-badge">#{h(badge)}</span>
         #{token_chip(estimate_tokens(text))}
+        #{copy_controls(text)}
       </div>
       #{body}
     </div>
@@ -1089,10 +1105,11 @@ end
 def render_user_input_block(text, kind: :user_input)
   shown = kind == :user_command ? command_display_text(text) : text.to_s
   <<~HTML
-    <div class="block block-user-input">
+    <div class="block block-user-input copy-root">
       <div class="block-header">
         <span class="block-badge">#{h(user_input_badge(text, kind))}</span>
         #{token_chip(estimate_tokens(text))}
+        #{copy_controls(shown)}
       </div>
       <pre class="content user-input-text">#{h(shown)}</pre>
     </div>
@@ -1124,10 +1141,11 @@ def render_text_block(text, role: nil)
 
   inner = render_text_content(text)
   <<~HTML
-    <div class="block block-text">
+    <div class="block block-text copy-root">
       <div class="block-header">
         <span class="block-badge">Text</span>
         #{token_chip(estimate_tokens(text))}
+        #{copy_controls(text)}
       </div>
       <div class="block-body">#{inner}</div>
     </div>
@@ -1321,13 +1339,15 @@ def render_skill_load_block(raw)
   path = parsed["path"]
   skill_name = parsed["name"]
   body = parsed["body"]
+  copy_text = body.to_s.empty? ? raw.to_s : body
 
   <<~HTML
-    <div class="block block-skill">
+    <div class="block block-skill copy-root">
       <div class="block-header">
         <span class="block-badge">Skill loaded</span>
         <span class="block-meta mono" title="#{h(path)}">#{h(skill_name)}</span>
         #{token_chip(estimate_tokens(raw))}
+        #{copy_controls(copy_text)}
       </div>
       #{%(<p class="skill-path mono">#{h(path)}</p>) unless path.empty?}
       #{%(<pre class="content">#{h(body)}</pre>) unless body.empty?}
@@ -1345,10 +1365,11 @@ def render_content_block(block, role: nil)
   when "thinking"
     thinking = block["thinking"]
     <<~HTML
-      <div class="block block-thinking">
+      <div class="block block-thinking copy-root">
         <div class="block-header">
           <span class="block-badge">Thinking</span>
           #{token_chip(estimate_tokens(thinking))}
+          #{copy_controls(thinking)}
         </div>
         <pre class="content">#{h(thinking)}</pre>
       </div>
@@ -1359,11 +1380,12 @@ def render_content_block(block, role: nil)
     name = block["name"].to_s
     name = "tool" if name.empty?
     <<~HTML
-      <div class="block block-tool-use">
+      <div class="block block-tool-use copy-root">
         <div class="block-header">
           <span class="block-badge">Tool use</span>
           <span class="block-meta mono" title="#{h(name)}">#{h(name)}</span>
           #{token_chip(estimate_tokens({ "name" => name, "input" => input }))}
+          #{copy_controls(input_text)}
         </div>
         <pre class="content">#{h(input_text)}</pre>
       </div>
@@ -1382,27 +1404,35 @@ def render_content_block(block, role: nil)
       else
         %(<pre class="content">#{h(content)}</pre>)
       end
+    copy_text =
+      case content
+      when String then content
+      when Hash, Array then pretty_json(content)
+      else content.to_s
+      end
     is_error = !!block["is_error"]
     error_class = is_error ? " block-tool-result-error" : ""
     badge = is_error ? "Tool result · error" : "Tool result"
     meta = block["tool_use_id"].to_s
     meta_html = meta.empty? ? "" : %(<span class="block-meta mono" title="#{h(meta)}">#{h(meta)}</span>)
     <<~HTML
-      <div class="block block-tool-result#{error_class}">
+      <div class="block block-tool-result#{error_class} copy-root">
         <div class="block-header">
           <span class="block-badge">#{h(badge)}</span>
           #{meta_html}
           #{token_chip(estimate_tokens(content))}
+          #{copy_controls(copy_text)}
         </div>
         <div class="block-body">#{content_html}</div>
       </div>
     HTML
   when "image"
     <<~HTML
-      <div class="block block-image">
+      <div class="block block-image copy-root">
         <div class="block-header">
           <span class="block-badge">Image</span>
           #{token_chip(estimate_tokens(block))}
+          #{copy_controls(block)}
         </div>
         <pre class="content">#{h(pretty_json(block))}</pre>
       </div>
@@ -1410,10 +1440,11 @@ def render_content_block(block, role: nil)
   else
     label = type.empty? ? "Block" : type
     <<~HTML
-      <div class="block block-other">
+      <div class="block block-other copy-root">
         <div class="block-header">
           <span class="block-badge">#{h(label)}</span>
           #{token_chip(estimate_tokens(block))}
+          #{copy_controls(block)}
         </div>
         <pre class="content">#{h(pretty_json(block))}</pre>
       </div>
@@ -2166,8 +2197,15 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
           if (copyBtn) {
             e.preventDefault();
             e.stopPropagation();
-            var details = copyBtn.closest("details");
-            var payload = details && details.querySelector(".copy-payload");
+            var root = copyBtn.closest(".copy-root, details, .block");
+            var payload = null;
+            if (root) {
+              // Prefer a payload in this header, then a direct child of the root.
+              var header = copyBtn.closest(".block-header, .section-summary-right, summary");
+              payload = (header && header.querySelector(".copy-payload")) ||
+                        root.querySelector(":scope > .copy-payload") ||
+                        root.querySelector(".copy-payload");
+            }
             var text = payload ? payload.value : "";
             if (!text) return;
             function done(ok) {
@@ -2862,6 +2900,9 @@ PAGE_CSS = <<~CSS
     padding: 0.35rem 0.65rem;
     border-bottom: 1px solid rgba(127, 127, 127, 0.15);
     background: rgba(127, 127, 127, 0.06);
+  }
+  .block-header .copy-btn {
+    margin-left: auto;
   }
   .block-badge {
     display: inline-flex;
