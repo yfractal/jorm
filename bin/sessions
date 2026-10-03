@@ -890,6 +890,52 @@ def memory_catalog_pattern
   /ix
 end
 
+# Project instructions file Claude Code injects into the prompt:
+#   Contents of /path/CLAUDE.md (project instructions, checked into the codebase):
+#   <file body>
+# Ends at the next "Contents of …" section (e.g. MEMORY.md) or end of text.
+def claude_md_pattern
+  /
+    Contents\ of\ [^\n]*CLAUDE\.md[^\n]*:\s*\n
+    (?:(?!Contents\ of\ )[^\n]*\n?)*
+  /ix
+end
+
+def parse_claude_md(raw)
+  lines = raw.to_s.sub(/\A\n+/, "").sub(/\n+\z/, "").split("\n", -1)
+  header = lines.first.to_s
+  path = ""
+  if (m = header.match(/\AContents of\s+(.+?)\s*\(/i))
+    path = m[1].strip
+  elsif (m = header.match(/\AContents of\s+(.+?):\s*\z/i))
+    path = m[1].strip
+  end
+  body = lines.drop(1).join("\n").sub(/\A\n+/, "").sub(/\n+\z/, "")
+  { "path" => path, "body" => body, "raw" => raw.to_s }
+end
+
+def extract_claude_md_from_text(text)
+  text.to_s.to_enum(:scan, claude_md_pattern).map do
+    parse_claude_md(Regexp.last_match[0])
+  end
+end
+
+def request_has_claude_md?(req)
+  body = req.is_a?(Hash) ? req["req_body"] : nil
+  return false unless body.is_a?(Hash)
+
+  each_request_text(body) do |text|
+    return true if text.to_s.match?(claude_md_pattern)
+  end
+  false
+end
+
+def claude_md_chip(present)
+  return "" unless present
+
+  %(<span class="claude-md-chip mono" title="Project instructions from CLAUDE.md">CLAUDE.md</span>)
+end
+
 def extract_memories_from_text(text)
   text = text.to_s
   match = text.match(memory_catalog_pattern)
@@ -1060,7 +1106,7 @@ def user_message_has_input?(content)
   end
 end
 
-def render_plain_or_skill_load_content(text)
+def render_skill_load_segments(text)
   text = text.to_s
   return "" if text.strip.empty?
 
@@ -1075,6 +1121,45 @@ def render_plain_or_skill_load_content(text)
   end
   after = text[last..]
   html << %(<pre class="content">#{h(after)}</pre>) unless after.nil? || after.strip.empty?
+  html
+end
+
+def render_claude_md_block(raw)
+  parsed = parse_claude_md(raw)
+  path = parsed["path"]
+  body = parsed["body"]
+  copy_text = body.to_s.empty? ? raw.to_s : body
+
+  <<~HTML
+    <div class="block block-claude-md copy-root">
+      <div class="block-header">
+        <span class="block-badge">CLAUDE.md</span>
+        <span class="block-meta">Project instructions</span>
+        #{token_chip(estimate_tokens(raw))}
+        #{copy_controls(copy_text)}
+      </div>
+      #{%(<p class="claude-md-path mono" title="#{h(path)}">#{h(path)}</p>) unless path.empty?}
+      #{%(<pre class="content">#{h(body)}</pre>) unless body.empty?}
+    </div>
+  HTML
+end
+
+def render_plain_or_skill_load_content(text)
+  text = text.to_s
+  return "" if text.strip.empty?
+
+  # Highlight CLAUDE.md project-instructions blocks, then skill loads.
+  html = +""
+  last = 0
+  text.to_enum(:scan, claude_md_pattern).each do
+    match = Regexp.last_match
+    before = text[last...match.begin(0)]
+    html << render_skill_load_segments(before)
+    html << render_claude_md_block(match[0])
+    last = match.end(0)
+  end
+  after = text[last..]
+  html << render_skill_load_segments(after)
   html
 end
 
@@ -1159,6 +1244,7 @@ def render_meta_text_block(text, kind:)
   body =
     if text.to_s.match?(available_skills_catalog_pattern) ||
        text.to_s.match?(memory_catalog_pattern) ||
+       text.to_s.match?(claude_md_pattern) ||
        text.to_s.match?(skill_load_pattern)
       inner = render_text_content(text)
       return "" if inner.strip.empty? || inner == %(<pre class="content"></pre>)
@@ -2003,7 +2089,7 @@ def render_request_card(req, open_details:, model_colors: {})
 
       <details class="section-details request-section"#{open_attr}>
         <summary>
-          <span class="section-summary-main">Request #{req_tok}#{human_input_chip(request_human_inputs(req))}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</span>
+          <span class="section-summary-main">Request #{req_tok}#{human_input_chip(request_human_inputs(req))}#{claude_md_chip(request_has_claude_md?(req))}#{skill_load_chip(request_loaded_skills(req))}#{cache_hit_chip(req)}</span>
           <span class="section-summary-right">
             #{request_brief_metrics(req)}
             <button type="button" class="copy-btn" data-action="copy-section" title="Copy JSON"#{body.nil? ? " disabled" : ""}>Copy</button>
@@ -2940,6 +3026,7 @@ PAGE_CSS = <<~CSS
   .cache-hit-chip,
   .skill-load-chip,
   .human-input-chip,
+  .claude-md-chip,
   .tool-use-chip {
     display: inline-flex;
     align-items: center;
@@ -2969,6 +3056,11 @@ PAGE_CSS = <<~CSS
     background: rgba(22, 163, 74, 0.14);
     border-color: rgba(22, 163, 74, 0.4);
   }
+  .claude-md-chip {
+    color: #9f1239;
+    background: rgba(225, 29, 72, 0.12);
+    border-color: rgba(225, 29, 72, 0.4);
+  }
   .tool-use-chip {
     color: #1d4ed8;
     background: rgba(37, 99, 235, 0.12);
@@ -2984,6 +3076,7 @@ PAGE_CSS = <<~CSS
     .cache-hit-chip { color: #ccc; background: rgba(127, 127, 127, 0.2); }
     .skill-load-chip { color: #fde68a; background: rgba(202, 138, 4, 0.22); }
     .human-input-chip { color: #86efac; background: rgba(22, 163, 74, 0.22); }
+    .claude-md-chip { color: #fda4af; background: rgba(225, 29, 72, 0.22); }
     .tool-use-chip { color: #93c5fd; background: rgba(37, 99, 235, 0.22); }
   }
 
@@ -3143,7 +3236,8 @@ PAGE_CSS = <<~CSS
     background: rgba(202, 138, 4, 0.16);
     border-color: rgba(202, 138, 4, 0.4);
   }
-  .skill-path {
+  .skill-path,
+  .claude-md-path {
     margin: 0;
     padding: 0.35rem 0.65rem 0;
     font-size: 0.75rem;
@@ -3151,6 +3245,18 @@ PAGE_CSS = <<~CSS
     word-break: break-all;
   }
   .block-skill > pre.content { padding: 0.45rem 0.65rem 0.55rem; }
+
+  .block-claude-md {
+    border-left-color: #e11d48;
+    background: rgba(225, 29, 72, 0.06);
+  }
+  .block-claude-md .block-header { background: rgba(225, 29, 72, 0.1); }
+  .block-claude-md .block-badge {
+    color: #9f1239;
+    background: rgba(225, 29, 72, 0.14);
+    border-color: rgba(225, 29, 72, 0.4);
+  }
+  .block-claude-md > pre.content { padding: 0.45rem 0.65rem 0.55rem; }
   .block-body { padding: 0; }
   .block-body > pre.content { padding: 0.55rem 0.65rem; }
   .block-body > .block { margin: 0.55rem; }
