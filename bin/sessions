@@ -836,6 +836,84 @@ def skill_load_pattern
   /x
 end
 
+# Claude Code injects a catalog like:
+#   The following skills are available for use with the Skill tool:
+#   - dataviz: Use this skill whenever...
+def available_skills_catalog_pattern
+  /
+    The\ following\ skills\ are\ available\ for\ use\ with\ the\ Skill\ tool:\s*\n
+    (?:[ \t]*-[ \t]*\S[^\n]*\n?)+
+  /ix
+end
+
+def extract_available_skills_from_text(text)
+  text = text.to_s
+  match = text.match(available_skills_catalog_pattern)
+  return [] unless match
+
+  skills = []
+  seen = {}
+  match[0].each_line do |line|
+    next unless (m = line.match(/\A\s*-\s*([A-Za-z0-9][A-Za-z0-9._\/-]*)\s*:\s*(.*?)\s*\z/))
+
+    name = m[1]
+    next if seen[name]
+
+    seen[name] = true
+    skills << { "name" => name, "description" => m[2].to_s.strip }
+  end
+  skills
+end
+
+def each_request_text(body)
+  return enum_for(:each_request_text, body) unless block_given?
+  return unless body.is_a?(Hash)
+
+  system = body["system"]
+  case system
+  when String
+    yield system
+  when Array
+    system.each do |block|
+      yield block["text"] if block.is_a?(Hash) && block["type"].to_s == "text"
+    end
+  end
+
+  Array(body["tools"]).each do |tool|
+    next unless tool.is_a?(Hash)
+
+    yield tool["description"].to_s
+  end
+
+  Array(body["messages"]).each do |msg|
+    next unless msg.is_a?(Hash)
+
+    content = msg["content"]
+    case content
+    when String
+      yield content
+    when Array
+      content.each do |block|
+        yield block["text"] if block.is_a?(Hash) && block["type"].to_s == "text"
+      end
+    end
+  end
+end
+
+def collect_available_skills(body)
+  seen = {}
+  skills = []
+  each_request_text(body) do |text|
+    extract_available_skills_from_text(text).each do |skill|
+      next if seen[skill["name"]]
+
+      seen[skill["name"]] = true
+      skills << skill
+    end
+  end
+  skills
+end
+
 # Classify plain text that appears inside a user message. Claude Code packs
 # reminders, slash-commands, and skill payloads into role=user alongside the
 # actual typed prompt — we want the typed prompt to stand out.
@@ -905,9 +983,9 @@ def user_message_has_input?(content)
   end
 end
 
-def render_text_content(text)
+def render_plain_or_skill_load_content(text)
   text = text.to_s
-  return %(<pre class="content"></pre>) if text.empty?
+  return "" if text.strip.empty?
 
   html = +""
   last = 0
@@ -923,11 +1001,42 @@ def render_text_content(text)
   html
 end
 
+def render_text_content(text)
+  text = text.to_s
+  return %(<pre class="content"></pre>) if text.empty?
+
+  # Collapse the verbose available-skills catalog into chips (same idea as Tools).
+  html = +""
+  last = 0
+  text.to_enum(:scan, available_skills_catalog_pattern).each do
+    match = Regexp.last_match
+    before = text[last...match.begin(0)]
+    html << render_plain_or_skill_load_content(before)
+    skills = extract_available_skills_from_text(match[0])
+    html <<
+      if skills.empty?
+        render_plain_or_skill_load_content(match[0])
+      else
+        render_skills_summary(skills, source_text: match[0])
+      end
+    last = match.end(0)
+  end
+  after = text[last..]
+  html << render_plain_or_skill_load_content(after)
+  html.empty? ? %(<pre class="content"></pre>) : html
+end
+
 # True when the string is only one or more skill-load sections (plus whitespace).
 def skill_load_only?(text)
   remainder = text.to_s.dup
   remainder.gsub!(skill_load_pattern, "")
   remainder.strip.empty? && text.to_s.match?(skill_load_pattern)
+end
+
+def available_skills_catalog_only?(text)
+  remainder = text.to_s.dup
+  remainder.gsub!(available_skills_catalog_pattern, "")
+  remainder.strip.empty? && text.to_s.match?(available_skills_catalog_pattern)
 end
 
 def render_meta_text_block(text, kind:)
@@ -952,13 +1061,20 @@ def render_meta_text_block(text, kind:)
     css = "block-text"
   end
 
+  body =
+    if text.to_s.match?(available_skills_catalog_pattern) || text.to_s.match?(skill_load_pattern)
+      %(<div class="block-body">#{render_text_content(text)}</div>)
+    else
+      %(<pre class="content">#{h(text)}</pre>)
+    end
+
   <<~HTML
     <div class="block #{css}">
       <div class="block-header">
         <span class="block-badge">#{h(badge)}</span>
         #{token_chip(estimate_tokens(text))}
       </div>
-      <pre class="content">#{h(text)}</pre>
+      #{body}
     </div>
   HTML
 end
@@ -985,12 +1101,17 @@ end
 
 def render_text_block(text, role: nil)
   text = text.to_s
-  if skill_load_only?(text)
+  if skill_load_only?(text) || available_skills_catalog_only?(text)
     return render_text_content(text)
   end
 
   if role.to_s == "user"
     kind = classify_user_text(text)
+    # Skills catalog mixed into a user-role payload should still chip-ify.
+    if text.match?(available_skills_catalog_pattern) && !human_input_kind?(kind)
+      return render_text_content(text)
+    end
+
     case kind
     when :user_input, :user_command
       return render_user_input_block(text, kind: kind)
@@ -1327,7 +1448,7 @@ def render_system_prompt(system, req_index:)
   body =
     case system
     when String
-      %(<pre class="content">#{h(system)}</pre>)
+      render_text_content(system)
     when Array
       system.map { |block| render_content_block(block) }.join
     else
@@ -1449,7 +1570,8 @@ def render_tools_summary(tools)
 
     desc = tool["description"].to_s.gsub(/\s+/, " ").strip
     title = desc.empty? ? name : "#{name} — #{desc[0, 240]}#{'…' if desc.length > 240}"
-    %(<span class="tool-chip mono" title="#{h(title)}">#{h(name)}</span>)
+    chip_class = name == "Skill" ? "tool-chip tool-chip-skill mono" : "tool-chip mono"
+    %(<span class="#{chip_class}" title="#{h(title)}">#{h(name)}</span>)
   end.join
 
   return "" if chips.empty?
@@ -1460,6 +1582,35 @@ def render_tools_summary(tools)
         <span class="block-badge tools-badge">Tools</span>
         <span class="tools-count">#{tools.size} available</span>
         #{token_chip(estimate_tokens(tools))}
+      </div>
+      <div class="tools-chips">#{chips}</div>
+    </div>
+  HTML
+end
+
+def render_skills_summary(skills, source_text: nil)
+  return "" unless skills.is_a?(Array) && !skills.empty?
+
+  chips = skills.filter_map do |skill|
+    next unless skill.is_a?(Hash)
+
+    name = skill["name"].to_s
+    next if name.empty?
+
+    desc = skill["description"].to_s.gsub(/\s+/, " ").strip
+    title = desc.empty? ? name : "#{name} — #{desc[0, 240]}#{'…' if desc.length > 240}"
+    %(<span class="skill-chip mono" title="#{h(title)}">#{h(name)}</span>)
+  end.join
+
+  return "" if chips.empty?
+
+  tok = source_text.nil? ? "" : token_chip(estimate_tokens(source_text))
+  <<~HTML
+    <div class="tools-panel skills-panel">
+      <div class="tools-panel-header skills-panel-header">
+        <span class="block-badge skills-badge">Skills</span>
+        <span class="tools-count">#{skills.size} available</span>
+        #{tok}
       </div>
       <div class="tools-chips">#{chips}</div>
     </div>
@@ -1521,10 +1672,27 @@ def render_request_body(req)
       ""
     end
 
+  # Skills catalog often lives in the Skill tool description or a message;
+  # surface a Tools-style chip panel. Inline catalogs in message text are
+  # also collapsed to chips via render_text_content.
+  skills_from_tools = collect_available_skills({ "tools" => body["tools"] })
+  skills_panel =
+    if skills_from_tools.empty?
+      ""
+    else
+      # Avoid duplicating a panel already rendered inline from message/system text.
+      inline_skills = []
+      each_request_text({ "system" => body["system"], "messages" => body["messages"] }) do |text|
+        inline_skills.concat(extract_available_skills_from_text(text))
+      end
+      inline_skills.empty? ? render_skills_summary(skills_from_tools) : ""
+    end
+
   <<~HTML
     #{system_html}
     #{message_html}
     #{render_tools_summary(body["tools"])}
+    #{skills_panel}
     #{render_raw_json_details("Raw JSON", body)}
   HTML
 end
@@ -2846,6 +3014,36 @@ PAGE_CSS = <<~CSS
     color: #1e3a8a;
     line-height: 1.3;
   }
+  .tool-chip-skill {
+    color: #713f12;
+    background: #facc15;
+    border-color: #eab308;
+  }
+  .skills-panel {
+    border-color: rgba(202, 138, 4, 0.4);
+    background: rgba(202, 138, 4, 0.06);
+  }
+  .skills-panel-header {
+    border-bottom-color: rgba(202, 138, 4, 0.25);
+    background: rgba(202, 138, 4, 0.1);
+  }
+  .skills-badge {
+    color: #854d0e;
+    background: rgba(202, 138, 4, 0.16);
+    border-color: rgba(202, 138, 4, 0.4);
+  }
+  .skill-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(202, 138, 4, 0.4);
+    background: rgba(250, 204, 21, 0.16);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #854d0e;
+    line-height: 1.3;
+  }
   @media (prefers-color-scheme: dark) {
     .tools-count { color: #bbb; }
     .tools-badge { color: #93c5fd; }
@@ -2853,6 +3051,17 @@ PAGE_CSS = <<~CSS
       background: rgba(15, 23, 42, 0.45);
       color: #93c5fd;
       border-color: rgba(147, 197, 253, 0.35);
+    }
+    .tool-chip-skill {
+      color: #1c1917;
+      background: #facc15;
+      border-color: #fde047;
+    }
+    .skills-badge { color: #fde68a; }
+    .skill-chip {
+      color: #fde68a;
+      background: rgba(202, 138, 4, 0.22);
+      border-color: rgba(250, 204, 21, 0.4);
     }
     .block-skill .block-badge { color: #fde68a; }
     .skill-path { color: #bbb; }
