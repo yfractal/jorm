@@ -880,6 +880,44 @@ def extract_available_skills_from_text(text)
   skills
 end
 
+# Claude Code injects auto-memory as:
+#   Contents of .../memory/MEMORY.md (user's auto-memory, ...):
+#   - [Title](file.md) — description
+def memory_catalog_pattern
+  /
+    Contents\ of\ [^\n]*\/memory\/MEMORY\.md[^\n]*:\s*\n
+    (?:[ \t]*-[ \t]*\[[^\]]+\]\([^)]+\)[^\n]*\n?)+
+  /ix
+end
+
+def extract_memories_from_text(text)
+  text = text.to_s
+  match = text.match(memory_catalog_pattern)
+  return [] unless match
+
+  memories = []
+  seen = {}
+  match[0].each_line do |line|
+    next unless (m = line.match(/\A\s*-\s*\[([^\]]+)\]\(([^)]+)\)\s*(?:[—–\-]+\s*(.*))?\s*\z/))
+
+    title = m[1].to_s.strip
+    file = m[2].to_s.strip
+    desc = m[3].to_s.strip
+    key = file.empty? ? title : file
+    next if key.empty? || seen[key]
+
+    seen[key] = true
+    name = file.empty? ? title : file.sub(/\.md\z/i, "")
+    memories << {
+      "title" => title.empty? ? name : title,
+      "file" => file,
+      "name" => name,
+      "description" => desc
+    }
+  end
+  memories
+end
+
 def each_request_text(body)
   return enum_for(:each_request_text, body) unless block_given?
   return unless body.is_a?(Hash)
@@ -927,6 +965,30 @@ def collect_available_skills(body)
     end
   end
   skills
+end
+
+def collect_memories(body)
+  seen = {}
+  memories = []
+  each_request_text(body) do |text|
+    extract_memories_from_text(text).each do |memory|
+      key = memory["file"].to_s.empty? ? memory["name"] : memory["file"]
+      next if seen[key]
+
+      seen[key] = true
+      memories << memory
+    end
+  end
+  memories
+end
+
+def first_catalog_match(body, pattern)
+  each_request_text(body) do |text|
+    if (m = text.to_s.match(pattern))
+      return m[0]
+    end
+  end
+  nil
 end
 
 # Classify plain text that appears inside a user message. Claude Code packs
@@ -1016,24 +1078,26 @@ def render_plain_or_skill_load_content(text)
   html
 end
 
+def strip_panel_catalogs(text)
+  cleaned = text.to_s.dup
+  cleaned.gsub!(available_skills_catalog_pattern) do |m|
+    extract_available_skills_from_text(m).empty? ? m : ""
+  end
+  cleaned.gsub!(memory_catalog_pattern) do |m|
+    extract_memories_from_text(m).empty? ? m : ""
+  end
+  cleaned.gsub(/\n{3,}/, "\n\n").strip
+end
+
 def render_text_content(text)
   text = text.to_s
   return %(<pre class="content"></pre>) if text.empty?
 
-  # Strip the available-skills catalog from inline text — chips render once
-  # after the Tools panel via render_request_body.
-  html = +""
-  last = 0
-  text.to_enum(:scan, available_skills_catalog_pattern).each do
-    match = Regexp.last_match
-    before = text[last...match.begin(0)]
-    html << render_plain_or_skill_load_content(before)
-    # Drop matched catalog when we can parse skill names; otherwise keep raw.
-    html << render_plain_or_skill_load_content(match[0]) if extract_available_skills_from_text(match[0]).empty?
-    last = match.end(0)
-  end
-  after = text[last..]
-  html << render_plain_or_skill_load_content(after)
+  # Strip skills/memory catalogs from inline text — chips render after Tools.
+  cleaned = strip_panel_catalogs(text)
+  return %(<pre class="content"></pre>) if cleaned.empty?
+
+  html = render_plain_or_skill_load_content(cleaned)
   html.empty? ? %(<pre class="content"></pre>) : html
 end
 
@@ -1050,8 +1114,26 @@ def available_skills_catalog_only?(text)
   remainder.strip.empty? && text.to_s.match?(available_skills_catalog_pattern)
 end
 
+def memory_catalog_only?(text)
+  remainder = text.to_s.dup
+  remainder.gsub!(memory_catalog_pattern, "")
+  remainder.strip.empty? && text.to_s.match?(memory_catalog_pattern)
+end
+
+# Skills and/or memory index catalogs with nothing else left.
+def injected_catalog_only?(text)
+  text = text.to_s
+  return false if text.strip.empty?
+
+  remainder = text.dup
+  had = false
+  remainder.gsub!(available_skills_catalog_pattern) { had = true; "" }
+  remainder.gsub!(memory_catalog_pattern) { had = true; "" }
+  had && remainder.strip.empty?
+end
+
 def render_meta_text_block(text, kind:)
-  return "" if available_skills_catalog_only?(text)
+  return "" if injected_catalog_only?(text)
 
   case kind
   when :system_reminder
@@ -1075,7 +1157,9 @@ def render_meta_text_block(text, kind:)
   end
 
   body =
-    if text.to_s.match?(available_skills_catalog_pattern) || text.to_s.match?(skill_load_pattern)
+    if text.to_s.match?(available_skills_catalog_pattern) ||
+       text.to_s.match?(memory_catalog_pattern) ||
+       text.to_s.match?(skill_load_pattern)
       inner = render_text_content(text)
       return "" if inner.strip.empty? || inner == %(<pre class="content"></pre>)
 
@@ -1120,7 +1204,7 @@ end
 def render_text_block(text, role: nil)
   text = text.to_s
   # Catalog-only payloads are shown after Tools; skip the empty inline block.
-  return "" if available_skills_catalog_only?(text)
+  return "" if injected_catalog_only?(text)
   return render_text_content(text) if skill_load_only?(text)
 
   if role.to_s == "user"
@@ -1453,7 +1537,7 @@ end
 def render_message_content(content, role: nil)
   case content
   when String
-    return "" if available_skills_catalog_only?(content)
+    return "" if injected_catalog_only?(content)
 
     if role.to_s == "user"
       kind = classify_user_text(content)
@@ -1648,6 +1732,44 @@ def render_skills_summary(skills, source_text: nil)
   HTML
 end
 
+def render_memory_summary(memories, source_text: nil)
+  return "" unless memories.is_a?(Array) && !memories.empty?
+
+  chips = memories.filter_map do |memory|
+    next unless memory.is_a?(Hash)
+
+    label = memory["title"].to_s
+    label = memory["name"].to_s if label.empty?
+    next if label.empty?
+
+    file = memory["file"].to_s
+    desc = memory["description"].to_s.gsub(/\s+/, " ").strip
+    tip_parts = [file.empty? ? nil : file, desc.empty? ? nil : desc].compact
+    tip =
+      if tip_parts.empty?
+        label
+      else
+        "#{label} — #{tip_parts.join(" — ")}"
+      end
+    tip = "#{tip[0, 240]}…" if tip.length > 240
+    %(<span class="memory-chip mono" title="#{h(tip)}">#{h(label)}</span>)
+  end.join
+
+  return "" if chips.empty?
+
+  tok = source_text.nil? ? "" : token_chip(estimate_tokens(source_text))
+  <<~HTML
+    <div class="tools-panel memory-panel">
+      <div class="tools-panel-header memory-panel-header">
+        <span class="block-badge memory-badge">Memory</span>
+        <span class="tools-count">#{memories.size} available</span>
+        #{tok}
+      </div>
+      <div class="tools-chips">#{chips}</div>
+    </div>
+  HTML
+end
+
 def render_raw_json_details(label, value)
   text =
     if value.is_a?(Hash) || value.is_a?(Array)
@@ -1703,22 +1825,18 @@ def render_request_body(req)
       ""
     end
 
-  # Always surface available skills after Tools (from Skill tool description,
-  # system prompt, or messages). Inline catalog prose is stripped above.
+  # Surface skills + memory after Tools. Inline catalog prose is stripped above.
   skills = collect_available_skills(body)
-  source_for_tokens = nil
-  each_request_text(body) do |text|
-    if (m = text.to_s.match(available_skills_catalog_pattern))
-      source_for_tokens = m[0]
-      break
-    end
-  end
+  memories = collect_memories(body)
+  skills_source = first_catalog_match(body, available_skills_catalog_pattern)
+  memory_source = first_catalog_match(body, memory_catalog_pattern)
 
   <<~HTML
     #{system_html}
     #{message_html}
     #{render_tools_summary(body["tools"])}
-    #{render_skills_summary(skills, source_text: source_for_tokens)}
+    #{render_skills_summary(skills, source_text: skills_source)}
+    #{render_memory_summary(memories, source_text: memory_source)}
     #{render_raw_json_details("Raw JSON", body)}
   HTML
 end
@@ -3111,6 +3229,31 @@ PAGE_CSS = <<~CSS
     color: #854d0e;
     line-height: 1.3;
   }
+  .memory-panel {
+    border-color: rgba(147, 51, 234, 0.4);
+    background: rgba(147, 51, 234, 0.05);
+  }
+  .memory-panel-header {
+    border-bottom-color: rgba(147, 51, 234, 0.22);
+    background: rgba(147, 51, 234, 0.09);
+  }
+  .memory-badge {
+    color: #6b21a8;
+    background: rgba(147, 51, 234, 0.14);
+    border-color: rgba(147, 51, 234, 0.4);
+  }
+  .memory-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(147, 51, 234, 0.4);
+    background: rgba(147, 51, 234, 0.1);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #6b21a8;
+    line-height: 1.3;
+  }
   @media (prefers-color-scheme: dark) {
     .tools-count { color: #bbb; }
     .tools-badge { color: #93c5fd; }
@@ -3129,6 +3272,12 @@ PAGE_CSS = <<~CSS
       color: #fde68a;
       background: rgba(202, 138, 4, 0.22);
       border-color: rgba(250, 204, 21, 0.4);
+    }
+    .memory-badge { color: #d8b4fe; }
+    .memory-chip {
+      color: #d8b4fe;
+      background: rgba(147, 51, 234, 0.22);
+      border-color: rgba(216, 180, 254, 0.4);
     }
     .block-skill .block-badge { color: #fde68a; }
     .skill-path { color: #bbb; }
