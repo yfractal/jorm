@@ -3386,7 +3386,9 @@ PAGE_CSS = <<~CSS
       border-color: rgba(216, 180, 254, 0.4);
     }
     .block-skill .block-badge { color: #fde68a; }
-    .skill-path { color: #bbb; }
+    .skill-path,
+    .claude-md-path { color: #bbb; }
+    .block-claude-md .block-badge { color: #fda4af; }
   }
 
   @media (prefers-color-scheme: dark) {
