@@ -153,7 +153,12 @@ end
 def format_pct(ratio)
   return "—" if ratio.nil?
 
-  format("%.0f%%", ratio * 100)
+  pct = ratio * 100
+  # Keep a decimal under 10% so tiny hits (e.g. 96/17,251) don't round to a
+  # misleading "1%" that doesn't match the token counts in the tooltip.
+  return format("%.1f%%", pct) if pct > 0 && pct < 10
+
+  format("%.0f%%", pct)
 end
 
 # Anthropic/OpenRouter: input_tokens is uncached only. Total prompt =
@@ -546,17 +551,37 @@ def build_session_detail(session_id, rows)
   durations = requests.filter_map { |r| r["duration_ms"] }
   ttfts = requests.filter_map { |r| r["ttft_ms"] }
   costs = requests.filter_map { |r| r["cost"] }
-  input_tokens = requests.filter_map { |r| r["input_tokens"] }
+  # Prefer total prompt tokens (uncached + cache write + cache read) so the
+  # session summary matches the per-request token chips.
+  prompt_rows = requests.select { |r| !(r["prompt_tokens"] || r["input_tokens"]).nil? }
+  total_prompt =
+    if prompt_rows.empty?
+      nil
+    else
+      prompt_rows.sum { |r| (r["prompt_tokens"] || r["input_tokens"]).to_i }
+    end
+  total_cache_read =
+    if prompt_rows.empty?
+      nil
+    else
+      prompt_rows.sum { |r| r["cache_read_tokens"].to_i }
+    end
   output_tokens = requests.filter_map { |r| r["output_tokens"] }
   tokens_per_sec = requests.filter_map { |r| r["tokens_per_sec"] }
+  session_hit_rate =
+    if total_prompt && total_prompt > 0
+      total_cache_read.to_f / total_prompt
+    end
 
   {
     "session_id" => session_id,
     "requests" => requests,
     "request_count" => requests.size,
     "total_cost" => costs.empty? ? nil : costs.sum,
-    "total_input_tokens" => input_tokens.empty? ? nil : input_tokens.sum,
+    "total_input_tokens" => total_prompt,
     "total_output_tokens" => output_tokens.empty? ? nil : output_tokens.sum,
+    "total_cache_read_tokens" => total_cache_read,
+    "cache_hit_rate" => session_hit_rate,
     "avg_duration_ms" => mean(durations),
     "max_duration_ms" => durations.max,
     "avg_ttft_ms" => mean(ttfts),
@@ -1509,17 +1534,19 @@ def render_usage_line(usage, cost)
 
   usage = {} unless usage.is_a?(Hash)
   parts = []
-  parts << "input #{usage["input_tokens"]}" if usage.key?("input_tokens")
-  parts << "output #{usage["output_tokens"]}" if usage.key?("output_tokens")
-  parts << "cache read #{usage["cache_read_input_tokens"]}" if usage.key?("cache_read_input_tokens")
-  parts << "cache create #{usage["cache_creation_input_tokens"]}" if usage.key?("cache_creation_input_tokens")
+  parts << "input #{usage["input_tokens"]}" if usage.key?("input_tokens") && !usage["input_tokens"].nil?
+  parts << "output #{usage["output_tokens"]}" if usage.key?("output_tokens") && !usage["output_tokens"].nil?
+
+  cache_read = usage.key?("cache_read_input_tokens") ? to_i_or_nil(usage["cache_read_input_tokens"]) : nil
+  cache_create = usage.key?("cache_creation_input_tokens") ? to_i_or_nil(usage["cache_creation_input_tokens"]) : nil
+  # OpenRouter often sends JSON null for unused cache fields — skip those.
+  parts << "cache read #{cache_read}" unless cache_read.nil?
+  parts << "cache create #{cache_create}" unless cache_create.nil?
 
   hit = cache_hit_rate(
     input_tokens: usage.key?("input_tokens") ? to_i_or_nil(usage["input_tokens"]) : nil,
-    cache_read_tokens:
-      usage.key?("cache_read_input_tokens") ? to_i_or_nil(usage["cache_read_input_tokens"]) : nil,
-    cache_creation_tokens:
-      usage.key?("cache_creation_input_tokens") ? to_i_or_nil(usage["cache_creation_input_tokens"]) : nil
+    cache_read_tokens: cache_read,
+    cache_creation_tokens: cache_create
   )
   parts << "cache hit #{format_pct(hit)}" unless hit.nil?
 
@@ -1905,6 +1932,10 @@ def render_session_page(detail:, range_preset:, from_raw:, to_raw:, per_page:, p
           <div class="stat">
             <span class="stat-value #{tokens_class(detail["total_output_tokens"])}">#{h(format_tokens(detail["total_output_tokens"]))}</span>
             <span class="stat-label">Output tokens</span>
+          </div>
+          <div class="stat" title="#{h(detail["cache_hit_rate"].nil? ? "No usage data" : "#{format_tokens(detail["total_cache_read_tokens"])} / #{format_tokens(detail["total_input_tokens"])} tokens from cache")}">
+            <span class="stat-value #{detail["cache_hit_rate"].nil? ? "cost-unknown" : ""}">#{h(format_pct(detail["cache_hit_rate"]))}</span>
+            <span class="stat-label">Cache hit</span>
           </div>
           <div class="stat">
             <span class="stat-value #{ms_class(detail["avg_duration_ms"])}">#{h(format_ms(detail["avg_duration_ms"]))}</span>
