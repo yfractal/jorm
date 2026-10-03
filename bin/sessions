@@ -1020,20 +1020,16 @@ def render_text_content(text)
   text = text.to_s
   return %(<pre class="content"></pre>) if text.empty?
 
-  # Collapse the verbose available-skills catalog into chips (same idea as Tools).
+  # Strip the available-skills catalog from inline text — chips render once
+  # after the Tools panel via render_request_body.
   html = +""
   last = 0
   text.to_enum(:scan, available_skills_catalog_pattern).each do
     match = Regexp.last_match
     before = text[last...match.begin(0)]
     html << render_plain_or_skill_load_content(before)
-    skills = extract_available_skills_from_text(match[0])
-    html <<
-      if skills.empty?
-        render_plain_or_skill_load_content(match[0])
-      else
-        render_skills_summary(skills, source_text: match[0])
-      end
+    # Drop matched catalog when we can parse skill names; otherwise keep raw.
+    html << render_plain_or_skill_load_content(match[0]) if extract_available_skills_from_text(match[0]).empty?
     last = match.end(0)
   end
   after = text[last..]
@@ -1118,17 +1114,12 @@ end
 
 def render_text_block(text, role: nil)
   text = text.to_s
-  if skill_load_only?(text) || available_skills_catalog_only?(text)
-    return render_text_content(text)
-  end
+  # Catalog-only payloads are shown after Tools; skip the empty inline block.
+  return "" if available_skills_catalog_only?(text)
+  return render_text_content(text) if skill_load_only?(text)
 
   if role.to_s == "user"
     kind = classify_user_text(text)
-    # Skills catalog mixed into a user-role payload should still chip-ify.
-    if text.match?(available_skills_catalog_pattern) && !human_input_kind?(kind)
-      return render_text_content(text)
-    end
-
     case kind
     when :user_input, :user_command
       return render_user_input_block(text, kind: kind)
@@ -1140,6 +1131,8 @@ def render_text_block(text, role: nil)
   end
 
   inner = render_text_content(text)
+  return "" if inner.strip.empty? || inner == %(<pre class="content"></pre>)
+
   <<~HTML
     <div class="block block-text copy-root">
       <div class="block-header">
@@ -1703,27 +1696,22 @@ def render_request_body(req)
       ""
     end
 
-  # Skills catalog often lives in the Skill tool description or a message;
-  # surface a Tools-style chip panel. Inline catalogs in message text are
-  # also collapsed to chips via render_text_content.
-  skills_from_tools = collect_available_skills({ "tools" => body["tools"] })
-  skills_panel =
-    if skills_from_tools.empty?
-      ""
-    else
-      # Avoid duplicating a panel already rendered inline from message/system text.
-      inline_skills = []
-      each_request_text({ "system" => body["system"], "messages" => body["messages"] }) do |text|
-        inline_skills.concat(extract_available_skills_from_text(text))
-      end
-      inline_skills.empty? ? render_skills_summary(skills_from_tools) : ""
+  # Always surface available skills after Tools (from Skill tool description,
+  # system prompt, or messages). Inline catalog prose is stripped above.
+  skills = collect_available_skills(body)
+  source_for_tokens = nil
+  each_request_text(body) do |text|
+    if (m = text.to_s.match(available_skills_catalog_pattern))
+      source_for_tokens = m[0]
+      break
     end
+  end
 
   <<~HTML
     #{system_html}
     #{message_html}
     #{render_tools_summary(body["tools"])}
-    #{skills_panel}
+    #{render_skills_summary(skills, source_text: source_for_tokens)}
     #{render_raw_json_details("Raw JSON", body)}
   HTML
 end
